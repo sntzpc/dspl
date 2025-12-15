@@ -483,10 +483,16 @@
 }
 
   async function renderQueueKpi(){
-    const queue = await IDB.queryIndex("violations", "synced", false);
+  // Jangan bergantung ke index boolean "synced" (lebih aman cross-browser)
+    const all = await IDB.getAll("violations");
+
+    // Queue = semua record yang BELUM benar-benar synced (true)
+    const queue = (all || []).filter(r => r && r.synced !== true);
+
     $("#kpiQueue").textContent = String(queue.length);
     $("#kpiQueueSub").textContent = queue.length ? "Perlu Sync Up" : "Semua data sudah tersinkron";
   }
+
 
   // ====== CSV export ======
   async function exportCsv(){
@@ -518,52 +524,131 @@
     toast("Data pelanggaran lokal dihapus.");
   }
 
+  function jsonp(url, timeoutMs=20000){
+    return new Promise((resolve, reject)=>{
+      const cb = "__cb_" + Math.random().toString(16).slice(2);
+      const u = new URL(url);
+      u.searchParams.set("callback", cb);
+
+      const s = document.createElement("script");
+      let done = false;
+
+      const timer = setTimeout(()=>{
+        if(done) return;
+        done = true;
+        cleanup();
+        reject(new Error("JSONP timeout"));
+      }, timeoutMs);
+
+      function cleanup(){
+        clearTimeout(timer);
+        try{ delete window[cb]; }catch(_){}
+        if(s && s.parentNode) s.parentNode.removeChild(s);
+      }
+
+      window[cb] = (data)=>{
+        if(done) return;
+        done = true;
+        cleanup();
+        resolve(data);
+      };
+
+      s.onerror = ()=>{
+        if(done) return;
+        done = true;
+        cleanup();
+        reject(new Error("JSONP load error"));
+      };
+
+      s.src = u.toString();
+      document.head.appendChild(s);
+    });
+  }
+
+  // POST tanpa preflight & tanpa baca response (hindari CORS)
+  async function postNoCors(url, payload){
+    // text/plain = "simple request" -> tidak memicu OPTIONS preflight
+    await fetch(url, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload || {})
+    });
+    return { ok:true }; // response opaque (tidak bisa dibaca)
+  }
+
+
   // ====== GAS API ======
   async function gasFetch(action, payload=null, method=null){
     const cfg = loadCfg();
     if(!cfg.gasUrl) throw new Error("GAS URL belum diisi.");
+
     const url = new URL(cfg.gasUrl);
     url.searchParams.set("action", action);
     if(cfg.apiKey) url.searchParams.set("key", cfg.apiKey);
 
-    const opt = { method: method || (payload ? "POST" : "GET"), headers: {} };
-    if(payload){
-      opt.headers["Content-Type"]="application/json";
-      opt.body = JSON.stringify(payload);
+    // GET -> gunakan JSONP (bebas CORS)
+    if(!payload && (!method || method === "GET")){
+      const js = await jsonp(url.toString(), 25000);
+      if(!js || js.ok === false) throw new Error((js && js.message) || "Gagal (JSONP).");
+      return js;
     }
 
-    const res = await fetch(url.toString(), opt);
-    const js = await res.json().catch(()=> ({}));
-    if(!res.ok || js.ok===false){
-      throw new Error(js.message || ("HTTP " + res.status));
+    // POST -> gunakan no-cors (hindari preflight CORS)
+    if(payload && (!method || method === "POST")){
+      await postNoCors(url.toString(), payload);
+      return { ok:true }; // tidak ada ids karena opaque
     }
+
+    // fallback
+    const js = await jsonp(url.toString(), 25000);
+    if(!js || js.ok === false) throw new Error((js && js.message) || "Gagal (fallback).");
     return js;
   }
 
+
   async function syncUp(){
-    const queue = await IDB.queryIndex("violations", "synced", false);
+    const all = await IDB.getAll("violations");
+    const queue = (all || []).filter(r => r && r.synced !== true);
+
     if(!queue.length){
       toast("Tidak ada antrian.");
+      $("#syncInfo").textContent = "Tidak ada antrian yang perlu dikirim.";
       return;
     }
+
     $("#syncInfo").textContent = `Mengirim ${queue.length} data...`;
-    const payload = { rows: queue };
-    const js = await gasFetch("upsertViolations", payload, "POST");
-    const okIds = new Set(js.ids || []);
+
+    // 1) Kirim (no-cors, tanpa baca response)
+    await gasFetch("upsertViolations", { rows: queue }, "POST");
+
+    // 2) Verifikasi dengan menarik log (JSONP GET) lalu cocokkan id
+    $("#syncInfo").textContent = `Verifikasi ke Google Sheet...`;
+    const js = await gasFetch("getViolations", null, "GET");
+    const rows = (js && js.rows) || [];
+    const idsOnSheet = new Set(rows.map(r => String(r.id || "").trim()).filter(Boolean));
+
+    let updated = 0;
     for(const r of queue){
-      if(okIds.has(r.id)){
+      if(r && idsOnSheet.has(String(r.id))){
         r.synced = true;
         r.synced_at = new Date().toISOString();
         await IDB.put("violations", r);
+        updated++;
       }
     }
-    $("#syncInfo").textContent = `Sukses: ${okIds.size}/${queue.length} data tersinkron.`;
+
+    $("#syncInfo").textContent = `Selesai: ${updated}/${queue.length} baris terkonfirmasi masuk Google Sheet.`;
+
     await refreshRecent();
     await renderAll();
     await refreshDashboard(true);
     await renderQueueKpi();
+
     toast("Sync Up selesai ✅");
   }
+
+
 
   async function pullMaster(){
     $("#syncInfo").textContent = "Mengambil master (peserta + pelanggaran)...";
