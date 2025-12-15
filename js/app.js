@@ -64,6 +64,11 @@
   const USER_KEY = "tc.pelanggaran.user";
   const INSTALL_KEY = "tc.pelanggaran.installPrompt";
 
+  // ====== AUTH ======
+  const AUTH_KEY = "tc.pelanggaran.auth";        // session
+  const ADMIN_HASH_KEY = "tc.pelanggaran.adminHash"; // admin password hash stored
+
+
   // ====== HARD-CODE GAS CONFIG (tanam permanen) ======
   const HARD_GAS_URL = "https://script.google.com/macros/s/AKfycbwwk4W2skF6xkSoec3laTEGdHbe4Z7E6vJkfS6tGjwUI18Z960n8rbqUPuRE-axz9Ww/exec";
   const HARD_API_KEY = "sntz2025"; // boleh "" jika tidak dipakai
@@ -87,6 +92,67 @@
   function saveUser(u){
     localStorage.setItem(USER_KEY, JSON.stringify(u||{}));
   }
+
+  // ---- SHA-256 helper (async) ----
+  async function sha256(text){
+    const enc = new TextEncoder().encode(String(text));
+    const buf = await crypto.subtle.digest("SHA-256", enc);
+    const arr = Array.from(new Uint8Array(buf));
+    return arr.map(b=> b.toString(16).padStart(2,"0")).join("");
+  }
+
+  function loadAuth(){
+    try{ return JSON.parse(localStorage.getItem(AUTH_KEY)) || null; }catch(_){ return null; }
+  }
+  function saveAuth(a){
+    localStorage.setItem(AUTH_KEY, JSON.stringify(a||{}));
+  }
+  function clearAuth(){
+    localStorage.removeItem(AUTH_KEY);
+  }
+
+  async function ensureAdminHash(){
+    // default admin password: admin123
+    let h = localStorage.getItem(ADMIN_HASH_KEY);
+    if(!h){
+      h = await sha256("admin123");
+      localStorage.setItem(ADMIN_HASH_KEY, h);
+    }
+    return h;
+  }
+
+  function isAdmin(){
+    const a = loadAuth();
+    return a && a.role === "admin";
+  }
+  function getUserNik(){
+    const a = loadAuth();
+    if(a && a.role === "user") return String(a.nik || "").trim();
+    return "";
+  }
+
+  async function changeAdminPassword(){
+    if(!isAdmin()){
+      toast("Hanya admin yang bisa ganti password.");
+      return;
+    }
+    const p1 = prompt("Masukkan password admin baru (min 6 karakter):", "");
+    if(p1 === null) return;
+    if(String(p1).trim().length < 6){
+      toast("Password minimal 6 karakter.");
+      return;
+    }
+    const p2 = prompt("Ulangi password baru:", "");
+    if(p2 === null) return;
+    if(p1 !== p2){
+      toast("Konfirmasi tidak sama.");
+      return;
+    }
+    const h = await sha256(p1);
+    localStorage.setItem(ADMIN_HASH_KEY, h);
+    toast("Password admin berhasil diubah ✅");
+  }
+
 
   function netUI(){
     const el = $("#netBadge");
@@ -127,17 +193,32 @@
   function initTabs(){
     $$(".tab").forEach(btn=>{
       btn.addEventListener("click", ()=>{
+        const a = loadAuth();
+        if(!a){
+          openLogin();
+          return;
+        }
+
+        // role gating: user hanya dash + data
+        const tab = btn.dataset.tab;
+        if(a.role === "user" && !["dash","data"].includes(tab)){
+          toast("Akses dibatasi: hanya Dashboard & Data untuk user.");
+          return;
+        }
+
         $$(".tab").forEach(b=>b.classList.remove("active"));
         btn.classList.add("active");
-        const tab = btn.dataset.tab;
+
         $$("main .panel").forEach(p=>p.style.display="none");
         $("#tab-"+tab).style.display="block";
+
         if(tab==="dash") refreshDashboard();
         if(tab==="data") renderAll();
         if(tab==="input") refreshRecent();
       });
     });
   }
+
 
   // ====== MASTER LOAD ======
   async function renderMaster(){
@@ -223,10 +304,15 @@
   }
 
   function wireInput(){
+    const a = loadAuth();
+    const isUser = a && a.role === "user";
+
+    // tetap set waktu, tetap pasang listener dasar
     $("#inpWaktu").value = toLocalInputValue(now());
     const u = loadUser();
     if(u.petugas) $("#inpPetugas").value = u.petugas;
 
+    // pasang listener form seperti biasa
     $("#inpPeserta").addEventListener("input", ()=> updateAutoStatus());
     $("#selPelanggaran").addEventListener("change", ()=>{
       const opt = $("#selPelanggaran").selectedOptions[0];
@@ -247,10 +333,20 @@
       updateAutoStatus();
     });
 
-    $("#btnSave").addEventListener("click", onSaveLocal);
+    // tombol2 umum tetap hidup
     $("#btnExportCsv").addEventListener("click", exportCsv);
     $("#btnClearLocal").addEventListener("click", clearLocal);
+
+    // khusus simpan: admin saja
+    if(isUser){
+      $("#btnSave").disabled = true;
+      $("#btnSave").style.opacity = "0.6";
+      $("#btnSave").title = "Mode user: tidak bisa input pelanggaran.";
+    }else{
+      $("#btnSave").addEventListener("click", onSaveLocal);
+    }
   }
+
 
   async function onSaveLocal(){
     const p = await resolveParticipant($("#inpPeserta").value);
@@ -332,9 +428,19 @@
     await renderQueueKpi();
   }
 
+  async function getVisibleViolations(){
+    const all = await IDB.getAll("violations");
+    const a = loadAuth();
+    if(a && a.role === "user"){
+      const nik = String(a.nik || "").trim();
+      return (all || []).filter(r=> String(r.nik) === nik);
+    }
+    return all || [];
+  }
+
   // ====== Recent & Data tables ======
   async function refreshRecent(){
-    const all = await IDB.getAll("violations");
+    const all = await getVisibleViolations();
     all.sort((a,b)=> new Date(b.waktu) - new Date(a.waktu));
     const recent = all.slice(0, 12);
     $("#tblRecent").innerHTML = recent.map(r=>{
@@ -353,7 +459,7 @@
 
   async function renderAll(){
     const q = String($("#inpFilter").value||"").trim().toLowerCase();
-    const all = await IDB.getAll("violations");
+    const all = await getVisibleViolations();
     all.sort((a,b)=> new Date(b.waktu) - new Date(a.waktu));
     const rows = q ? all.filter(r=>
       String(r.nik).includes(q) ||
@@ -390,7 +496,7 @@
   // ====== Dashboard ======
   let chartJenis;
   async function refreshDashboard(silent=false){
-  const all = await IDB.getAll("violations");
+  const all = await getVisibleViolations();
 
   // KPI Hari ini (tetap fixed)
   const startToday = startOfDay(new Date());
@@ -484,7 +590,7 @@
 
   async function renderQueueKpi(){
   // Jangan bergantung ke index boolean "synced" (lebih aman cross-browser)
-    const all = await IDB.getAll("violations");
+    const all = await getVisibleViolations();
 
     // Queue = semua record yang BELUM benar-benar synced (true)
     const queue = (all || []).filter(r => r && r.synced !== true);
@@ -496,7 +602,7 @@
 
   // ====== CSV export ======
   async function exportCsv(){
-    const all = await IDB.getAll("violations");
+    const all = await getVisibleViolations();
     all.sort((a,b)=> new Date(a.waktu)-new Date(b.waktu));
     const headers = ["waktu","nik","nama","program","divisi","unit","region","group","pelanggaran","kategori","poin","status","konsekuensi","sanksi","catatan","petugas","synced","synced_at","id"];
     const rows = [headers.join(",")].concat(all.map(r=>{
@@ -608,6 +714,8 @@
 
 
   async function syncUp(){
+    const a = loadAuth();
+    if(a && a.role === "user") throw new Error("Mode user: tidak diizinkan sync.");
     const all = await IDB.getAll("violations");
     const queue = (all || []).filter(r => r && r.synced !== true);
 
@@ -651,6 +759,8 @@
 
 
   async function pullMaster(){
+    const a = loadAuth();
+    if(a && a.role === "user") throw new Error("Mode user: tidak diizinkan pull.");
     $("#syncInfo").textContent = "Mengambil master (peserta + pelanggaran)...";
     const js = await gasFetch("getMaster");
     const peserta = (js.participants || []).map(p=>({...p, nik:String(p.nik).trim()}));
@@ -666,6 +776,8 @@
   }
 
   async function pullLogs(){
+    const a = loadAuth();
+    if(a && a.role === "user") throw new Error("Mode user: tidak diizinkan pull.");
     $("#syncInfo").textContent = "Mengambil data pelanggaran dari Google Sheet...";
     const js = await gasFetch("getViolations");
     const rows = js.rows || [];
@@ -682,29 +794,117 @@
   }
 
   function wireSyncTab(){
-  // tampilkan saja (readonly) supaya user bisa melihat, tapi tidak perlu input
     const cfg = loadCfg();
-    $("#inpGasUrl").value = cfg.gasUrl || "";
-    $("#inpApiKey").value = cfg.apiKey || "";
-    $("#inpGasUrl").readOnly = true;
-    $("#inpApiKey").readOnly = true;
+    const a = loadAuth();
+    const isUser = a && a.role === "user";
 
-    // tombol simpan dinonaktifkan agar tidak membingungkan
-    $("#btnSaveCfg").disabled = true;
-    $("#btnSaveCfg").style.opacity = "0.6";
-    $("#btnSaveCfg").title = "Config ditanam di app.js";
-    $("#cfgInfo").textContent = "Config ditanam di app.js (read-only).";
+    // ===== 1) Selalu tampilkan config (read-only) =====
+    const gasEl = $("#inpGasUrl");
+    const keyEl = $("#inpApiKey");
+    if(gasEl){
+      gasEl.value = cfg.gasUrl || "";
+      gasEl.readOnly = true;
+    }
+    if(keyEl){
+      keyEl.value = cfg.apiKey || "";
+      keyEl.readOnly = true;
+    }
 
-    $("#btnSyncUp").addEventListener("click", async ()=>{
-      try{ await syncUp(); }catch(e){ $("#syncInfo").textContent = "Gagal: " + e.message; toast("Gagal sync: " + e.message); }
-    });
-    $("#btnPullMaster").addEventListener("click", async ()=>{
-      try{ await pullMaster(); }catch(e){ $("#syncInfo").textContent = "Gagal: " + e.message; toast("Gagal pull: " + e.message); }
-    });
-    $("#btnPullLogs").addEventListener("click", async ()=>{
-      try{ await pullLogs(); }catch(e){ $("#syncInfo").textContent = "Gagal: " + e.message; toast("Gagal tarik: " + e.message); }
-    });
+    const btnSaveCfg = $("#btnSaveCfg");
+    if(btnSaveCfg){
+      btnSaveCfg.disabled = true;
+      btnSaveCfg.style.opacity = "0.6";
+      btnSaveCfg.title = "Config ditanam di app.js";
+    }
+    const cfgInfo = $("#cfgInfo");
+    if(cfgInfo) cfgInfo.textContent = "Config ditanam di app.js (read-only).";
+
+    // ===== util: lock / unlock button =====
+    function lockBtn(btn, text){
+      if(!btn) return;
+      btn.dataset._locked = "1";
+      btn.dataset._label = btn.textContent;
+      btn.textContent = text || "⏳ Processing...";
+      btn.disabled = true;
+      btn.style.opacity = "0.7";
+    }
+
+    function unlockBtn(btn){
+      if(!btn) return;
+      btn.textContent = btn.dataset._label || btn.textContent;
+      btn.disabled = false;
+      btn.style.opacity = "1";
+      delete btn.dataset._locked;
+      delete btn.dataset._label;
+    }
+
+    async function safeRun(btn, fn, loadingText){
+      if(!btn || btn.dataset._locked === "1") return;
+      lockBtn(btn, loadingText);
+      try{
+        await fn();
+      }catch(e){
+        $("#syncInfo").textContent = "Gagal: " + e.message;
+        toast("Gagal: " + e.message);
+      }finally{
+        unlockBtn(btn);
+      }
+    }
+
+    // ===== tombol =====
+    const btnSyncUp = $("#btnSyncUp");
+    const btnPullMaster = $("#btnPullMaster");
+    const btnPullLogs = $("#btnPullLogs");
+
+    // ===== 2) Role gating: USER =====
+    if(isUser){
+      [btnSyncUp, btnPullMaster, btnPullLogs].forEach(btn=>{
+        if(btn){
+          btn.disabled = true;
+          btn.style.opacity = "0.6";
+        }
+      });
+      if(btnSyncUp) btnSyncUp.title = "Mode user: tidak diizinkan Sync";
+      if(btnPullMaster) btnPullMaster.title = "Mode user: tidak diizinkan Pull Master";
+      if(btnPullLogs) btnPullLogs.title = "Mode user: tidak diizinkan Pull Logs";
+
+      const info = $("#syncInfo");
+      if(info) info.textContent = "Mode user: sinkronisasi hanya dapat dilakukan oleh admin.";
+      return;
+    }
+
+    // ===== 3) ADMIN: pasang handler dengan anti double-click =====
+    if(btnSyncUp){
+      btnSyncUp.addEventListener("click", ()=>{
+        safeRun(
+          btnSyncUp,
+          async ()=>{ await syncUp(); },
+          "⏳ Syncing..."
+        );
+      });
+    }
+
+    if(btnPullMaster){
+      btnPullMaster.addEventListener("click", ()=>{
+        safeRun(
+          btnPullMaster,
+          async ()=>{ await pullMaster(); },
+          "⏳ Pull Master..."
+        );
+      });
+    }
+
+    if(btnPullLogs){
+      btnPullLogs.addEventListener("click", ()=>{
+        safeRun(
+          btnPullLogs,
+          async ()=>{ await pullLogs(); },
+          "⏳ Pull Logs..."
+        );
+      });
+    }
   }
+
 
   // ====== QR ======
   let qr;
@@ -767,6 +967,202 @@
     });
   }
 
+  function applyRoleUI(){
+    const a = loadAuth();
+
+    // show logout when logged in
+    const btnL = $("#btnLogout");
+    if(btnL) btnL.style.display = a ? "inline-flex" : "none";
+
+    // tabs visibility
+    const tabs = $$(".tab");
+    tabs.forEach(t=>{
+      const tab = t.dataset.tab;
+      // admin: semua
+      if(!a){
+        t.style.display = "inline-flex";
+        return;
+      }
+      if(a.role === "admin"){
+        t.style.display = "inline-flex";
+        return;
+      }
+      // user: hanya dash + data
+      t.style.display = (["dash","data"].includes(tab)) ? "inline-flex" : "none";
+    });
+
+    // if user, paksa aktifkan dashboard tab
+    if(a && a.role === "user"){
+      const dashBtn = $(`.tab[data-tab="dash"]`);
+      if(dashBtn){
+        $$(".tab").forEach(b=>b.classList.remove("active"));
+        dashBtn.classList.add("active");
+      }
+      $$("main .panel").forEach(p=>p.style.display="none");
+      $("#tab-dash").style.display = "block";
+    }
+
+    // Update subtitle / title hint (optional)
+    const titleEl = document.querySelector(".subtitle");
+    if(titleEl){
+      if(!a) titleEl.textContent = "Offline-first • Login diperlukan";
+      else if(a.role === "admin") titleEl.textContent = "Offline-first • Admin mode";
+      else titleEl.textContent = `Offline-first • User mode (${a.nik})`;
+    }
+  }
+
+  function resetLoginButton(){
+    const btnLogin = $("#btnLogin");
+    if(!btnLogin) return;
+
+    btnLogin.disabled = false;
+    btnLogin.style.opacity = "1";
+    btnLogin.textContent = "Masuk";
+
+    delete btnLogin.dataset._locked;
+    delete btnLogin.dataset._label;
+  }
+
+
+  function openLogin(){
+    const m = $("#loginModal");
+    if(!m) return;
+    m.style.display = "flex";
+    $("#loginUser").value = "";
+    $("#loginPass").value = "";
+    $("#loginHint").textContent = "";
+    resetLoginButton();
+    setTimeout(()=> $("#loginUser")?.focus(), 50);
+  }
+
+  function closeLogin(){
+    const m = $("#loginModal");
+    if(!m) return;
+    m.style.display = "none";
+  }
+
+  async function doLogin(){
+    const u = String($("#loginUser").value||"").trim();
+    const p = String($("#loginPass").value||"");
+
+    const hintEl = $("#loginHint");
+    const btnLogin = $("#btnLogin");
+
+    // anti double-click (login)
+    if(btnLogin && btnLogin.dataset._locked === "1") return;
+    const lockLogin = (text)=>{
+      if(!btnLogin) return;
+      btnLogin.dataset._locked = "1";
+      btnLogin.dataset._label = btnLogin.textContent;
+      btnLogin.textContent = text || "⏳ Memproses...";
+      btnLogin.disabled = true;
+      btnLogin.style.opacity = "0.7";
+    };
+    const unlockLogin = ()=>{
+      if(!btnLogin) return;
+      btnLogin.textContent = btnLogin.dataset._label || "Masuk";
+      btnLogin.disabled = false;
+      btnLogin.style.opacity = "1";
+      delete btnLogin.dataset._locked;
+      delete btnLogin.dataset._label;
+    };
+
+    try{
+      if(!u){
+        if(hintEl) hintEl.textContent = "Username wajib diisi.";
+        return;
+      }
+
+      // ===== ADMIN LOGIN =====
+      if(u.toLowerCase() === "admin"){
+        lockLogin("⏳ Login admin...");
+        await ensureAdminHash();
+        const stored = localStorage.getItem(ADMIN_HASH_KEY);
+        const inputHash = await sha256(p);
+        if(inputHash !== stored){
+          if(hintEl) hintEl.textContent = "Password admin salah.";
+          return;
+        }
+        saveAuth({ role:"admin", username:"admin", login_at:new Date().toISOString() });
+        closeLogin();
+        applyRoleUI();
+        toast("Login admin ✅");
+        await refreshDashboard(true);
+        return;
+      }
+
+      // ===== USER LOGIN (NIK, password kosong) =====
+      if(p && p.trim() !== ""){
+        if(hintEl) hintEl.textContent = "Untuk user: password harus kosong.";
+        return;
+      }
+
+      const nik = u;
+
+      // 1) cek apakah NIK sudah ada di DB
+      let part = await IDB.get("participants", nik);
+
+      // 2) jika belum ada, coba AUTO PULL MASTER (tanpa perlu tombol)
+      if(!part){
+        if(!navigator.onLine){
+          if(hintEl) hintEl.textContent = "NIK belum ada di perangkat. Silakan online sekali untuk tarik Master.";
+          return;
+        }
+
+        lockLogin("⏳ Tarik Master...");
+        if(hintEl) hintEl.textContent = "NIK belum ada. Mengambil Master dari Google Sheet...";
+
+        // gunakan fungsi existing (boleh), karena saat ini belum login jadi tidak kena role-block
+        await pullMaster();
+
+        // cek ulang
+        part = await IDB.get("participants", nik);
+        if(!part){
+          if(hintEl) hintEl.textContent = "NIK tidak ditemukan di Master. Hubungi admin untuk update data peserta.";
+          return;
+        }
+      }
+
+      // 3) opsional cepat: kalau log lokal masih kosong, auto tarik logs sekali (supaya dashboard langsung ada data)
+      //   (ini tetap minimal, tanpa ubah GAS. Memang menarik semua logs, tapi user view akan otomatis terfilter oleh getVisibleViolations)
+      const localLogs = await IDB.getAll("violations");
+      if((!localLogs || localLogs.length === 0) && navigator.onLine){
+        lockLogin("⏳ Tarik Data...");
+        if(hintEl) hintEl.textContent = "Master siap. Mengambil data pelanggaran dari Google Sheet (sekali)...";
+        // Panggil langsung GAS agar tidak kena block role (karena belum saveAuth)
+        const js = await gasFetch("getViolations", null, "GET");
+        const rows = (js && js.rows) || [];
+        for(const r of rows){
+          await IDB.put("violations", { ...r, synced:true, synced_at: r.synced_at || r.updated_at || "" });
+        }
+      }
+
+      // 4) login user
+      lockLogin("⏳ Login user...");
+      saveAuth({ role:"user", nik:String(nik), nama: part.nama || "", login_at:new Date().toISOString() });
+
+      closeLogin();
+      applyRoleUI();
+      toast("Login user ✅");
+      await refreshDashboard(true);
+
+    }catch(err){
+      console.error(err);
+      if(hintEl) hintEl.textContent = "Gagal: " + (err.message || err);
+      toast("Login gagal: " + (err.message || err));
+    }finally{
+      unlockLogin();
+    }
+  }
+
+  async function logout(){
+    clearAuth();
+    applyRoleUI();
+    openLogin();
+    resetLoginButton();
+  }
+
+
   // ====== Toast ======
   function toast(msg){
   let el = document.querySelector("#toast");
@@ -804,6 +1200,19 @@
     window.addEventListener("offline", netUI);
 
     await ensureSeeded();
+    // ===== LOGIN FIRST =====
+    applyRoleUI();
+    const a = loadAuth();
+    if(!a){
+      openLogin();
+    }
+    $("#btnLogin")?.addEventListener("click", ()=> doLogin().catch(err=> toast("Login gagal: " + err.message)));
+    $("#loginPass")?.addEventListener("keydown", (e)=>{ if(e.key==="Enter") $("#btnLogin")?.click(); });
+    $("#loginUser")?.addEventListener("keydown", (e)=>{ if(e.key==="Enter") $("#btnLogin")?.click(); });
+
+    $("#btnLogout")?.addEventListener("click", ()=> logout().catch(()=>{}));
+    $("#loginModal")?.addEventListener("click", (e)=>{ if(e.target.id==="loginModal"){} }); // no close on backdrop
+
     initTabs();
     // Dashboard period controls
     const dp = $("#dashPeriod");
@@ -822,6 +1231,13 @@
       toggleCustom();
     }
     wireInstall();
+    window.addEventListener("keydown", (e)=>{
+      // Ctrl+Shift+P untuk ganti password admin
+      if(e.ctrlKey && e.shiftKey && (e.key === "P" || e.key === "p")){
+        changeAdminPassword().catch(()=>{});
+      }
+    });
+
     wireQr();
     wireDataTab();
     wireSyncTab();

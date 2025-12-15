@@ -25,6 +25,7 @@
   </div>
   <div class="right">
     <span id="netBadge" class="badge">offline</span>
+    <button id="btnLogout" class="btn ghost" style="display:none">Logout</button>
     <button id="btnInstall" class="btn ghost" style="display:none">Install</button>
   </div>
 </header>
@@ -271,6 +272,35 @@
     </div>
     <div id="qrReader" style="width: min(420px, 95vw)"></div>
     <div class="muted small">Catatan: untuk keamanan, QR cukup berisi NIK angka saja.</div>
+  </div>
+</div>
+
+<!-- LOGIN MODAL -->
+<div id="loginModal" class="modal" style="display:none">
+  <div class="modalCard" style="max-width:520px">
+    <div class="row">
+      <div>
+        <div class="label">Login Aplikasi</div>
+        <div class="muted small">Admin: username <b>admin</b> • User: username = <b>NIK</b> (tanpa password)</div>
+      </div>
+    </div>
+
+    <div class="grid form" style="margin-top:14px">
+      <div>
+        <label>Username</label>
+        <input id="loginUser" placeholder="admin atau NIK..." autocomplete="username" />
+        <div id="loginHint" class="muted small"></div>
+      </div>
+      <div>
+        <label>Password</label>
+        <input id="loginPass" type="password" placeholder="(kosong untuk user)" autocomplete="current-password" />
+        <div class="muted small">Untuk user: kosongkan password.</div>
+      </div>
+    </div>
+
+    <div class="row end" style="margin-top:12px; gap:10px">
+      <button id="btnLogin" class="btn primary">Masuk</button>
+    </div>
   </div>
 </div>
 
