@@ -1,4 +1,4 @@
-const CACHE_NAME = "tc-pelanggaran-v6";
+const CACHE_NAME = "tc-pelanggaran-v7";
 const ASSETS = [
   "./",
   "./index.html",

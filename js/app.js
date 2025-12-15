@@ -616,29 +616,33 @@
 
   // ====== Toast ======
   function toast(msg){
-    let el = $("#toast");
-    if(!el){
-      el = document.createElement("div");
-      el.id = "toast";
-      el.style.position = "fixed";
-      el.style.left = "50%";
-      el.style.bottom = "18px";
-      el.style.transform = "translateX(-50%)";
-      el.style.background = "rgba(17,31,61,.95)";
-      el.style.border = "1px solid rgba(255,255,255,.12)";
-      el.style.padding = "10px 12px";
-      el.style.borderRadius = "999px";
-      el.style.boxShadow = "0 10px 30px rgba(0,0,0,.35)";
-      el.style.zIndex = 999;
-      el.style.maxWidth = "92vw";
-      el.style.textAlign = "center";
-      document.body.appendChild(el);
-    }
-    el.textContent = msg;
-    el.style.opacity = "1";
-    clearTimeout(window.__toastT);
-    window.__toastT = setTimeout(()=> el.style.opacity="0", 2200);
+  let el = document.querySelector("#toast");
+  if(!el){
+    el = document.createElement("div");
+    el.id = "toast";
+    el.style.position = "fixed";
+    el.style.right = "20px";
+    el.style.bottom = "20px";
+    el.style.background = "rgba(39,174,96,.95)";
+    el.style.color = "#fff";
+    el.style.padding = "14px 18px";
+    el.style.borderRadius = "8px";
+    el.style.boxShadow = "0 4px 6px rgba(0,0,0,.15)";
+    el.style.zIndex = 1001;
+    el.style.maxWidth = "92vw";
+    el.style.fontWeight = "800";
+    document.body.appendChild(el);
   }
+  el.textContent = msg;
+  el.style.display = "block";
+  el.style.opacity = "1";
+  clearTimeout(window.__toastT);
+  window.__toastT = setTimeout(()=>{
+    el.style.opacity = "0";
+    setTimeout(()=> el.style.display="none", 250);
+  }, 2200);
+  }
+
 
   // ====== boot ======
   async function boot(){
