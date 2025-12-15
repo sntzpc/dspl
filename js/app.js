@@ -13,6 +13,47 @@
   };
   const now = ()=> new Date();
 
+  function startOfDay(d){
+  const x = new Date(d);
+  x.setHours(0,0,0,0);
+  return x;
+  }
+  function parseDateOnly(v){
+    // v: "YYYY-MM-DD"
+    if(!v) return null;
+    const d = new Date(v + "T00:00:00");
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  function getDashRange(){
+    const sel = $("#dashPeriod");
+    const v = sel ? sel.value : "30";
+    const tNow = now();
+    if(v === "today"){
+      const from = startOfDay(tNow);
+      const to = new Date(from); to.setDate(to.getDate()+1);
+      return { from, to, label: "Hari ini" };
+    }
+    if(v === "7" || v === "30"){
+      const days = Number(v);
+      const to = tNow;
+      const from = new Date(to.getTime() - days*24*3600*1000);
+      return { from, to, label: `${days} hari terakhir` };
+    }
+    // custom
+    const fromD = parseDateOnly($("#dashFrom")?.value);
+    const toD   = parseDateOnly($("#dashTo")?.value);
+    if(fromD && toD){
+      const from = startOfDay(fromD);
+      const to = startOfDay(toD); to.setDate(to.getDate()+1); // include end date
+      return { from, to, label: `${$("#dashFrom").value} s/d ${$("#dashTo").value}` };
+    }
+    // fallback
+    const to = tNow;
+    const from = new Date(to.getTime() - 30*24*3600*1000);
+    return { from, to, label: "30 hari terakhir" };
+  }
+
+
   const uuid = ()=>{
     if (crypto && crypto.randomUUID) return crypto.randomUUID();
     // fallback
@@ -349,44 +390,67 @@
   // ====== Dashboard ======
   let chartJenis;
   async function refreshDashboard(silent=false){
-    const all = await IDB.getAll("violations");
-    const tNow = Date.now();
-    const startToday = new Date(); startToday.setHours(0,0,0,0);
-    const since30 = tNow - 30*24*3600*1000;
+  const all = await IDB.getAll("violations");
 
-    const todayRows = all.filter(r=> new Date(r.waktu).getTime() >= startToday.getTime());
-    const rows30 = all.filter(r=> new Date(r.waktu).getTime() >= since30);
+  // KPI Hari ini (tetap fixed)
+  const startToday = startOfDay(new Date());
+  const todayRows = all
+    .filter(r=> new Date(r.waktu).getTime() >= startToday.getTime())
+    .sort((a,b)=> new Date(b.waktu) - new Date(a.waktu));
 
-    $("#kpiToday").textContent = String(todayRows.length);
-    $("#kpiTodaySub").textContent = todayRows.length ? `Terakhir: ${fmtDate(new Date(todayRows[0].waktu))}` : "—";
+  $("#kpiToday").textContent = String(todayRows.length);
+  $("#kpiTodaySub").textContent = todayRows.length
+    ? `Terakhir: ${fmtDate(new Date(todayRows[0].waktu))}`
+    : "—";
 
-    const points30 = rows30.reduce((a,r)=> a + Number(r.poin||0), 0);
-    $("#kpiPoints30").textContent = String(points30);
-    $("#kpiPoints30Sub").textContent = `Periode 30 hari terakhir`;
+  // Range utama dashboard (mengikuti dropdown: today/7/30/custom)
+  const { from, to, label } = getDashRange();
+  const fromTs = from.getTime();
+  const toTs   = to.getTime();
 
-    const byNik = new Map();
-    for(const r of rows30){
-      byNik.set(r.nik, (byNik.get(r.nik)||0) + Number(r.poin||0));
-    }
-    let risk = 0;
-    for(const v of byNik.values()){
-      if(v>=50) risk++;
-    }
-    $("#kpiRisk").textContent = String(risk);
-    $("#kpiRiskSub").textContent = `Dari ${byNik.size} peserta yang punya catatan 30 hari`;
+  const rowsRange = all.filter(r=>{
+    const ts = new Date(r.waktu).getTime();
+    return ts >= fromTs && ts < toTs;
+  });
 
-    await renderQueueKpi();
+  // Total poin pada range
+  const points = rowsRange.reduce((a,r)=> a + Number(r.poin||0), 0);
+  $("#kpiPoints30").textContent = String(points);
+  $("#kpiPoints30Sub").textContent = `Periode: ${label}`;
 
-    // Chart jenis (30 hari)
-    const byJenis = new Map();
-    for(const r of rows30){
-      byJenis.set(r.pelanggaran, (byJenis.get(r.pelanggaran)||0)+1);
-    }
-    const labels = Array.from(byJenis.keys()).sort((a,b)=> byJenis.get(b)-byJenis.get(a)).slice(0,12);
-    const vals = labels.map(l=> byJenis.get(l));
-    $("#dashRange").textContent = `${labels.length} jenis teratas • ${rows30.length} kejadian`;
+  // Total poin per peserta pada range
+  const byNik = new Map();
+  for(const r of rowsRange){
+    byNik.set(r.nik, (byNik.get(r.nik)||0) + Number(r.poin||0));
+  }
 
-    const ctx = $("#chartJenis").getContext("2d");
+  // Peserta “bermasalah” pada range (≥50 poin)
+  let risk = 0;
+  for(const v of byNik.values()){
+    if(v>=50) risk++;
+  }
+  $("#kpiRisk").textContent = String(risk);
+  $("#kpiRiskSub").textContent = `Dari ${byNik.size} peserta yang punya catatan pada periode ini`;
+
+  // Antrian sync (tetap)
+  await renderQueueKpi();
+
+  // Chart jenis (mengikuti range)
+  const byJenis = new Map();
+  for(const r of rowsRange){
+    byJenis.set(r.pelanggaran, (byJenis.get(r.pelanggaran)||0)+1);
+  }
+
+  const labels = Array.from(byJenis.keys())
+    .sort((a,b)=> (byJenis.get(b)||0) - (byJenis.get(a)||0))
+    .slice(0,12);
+  const vals = labels.map(l=> byJenis.get(l));
+
+  $("#dashRange").textContent = `${label} • ${rowsRange.length} kejadian • ${labels.length} jenis teratas`;
+
+  const canvas = $("#chartJenis");
+  if(canvas){
+    const ctx = canvas.getContext("2d");
     if(chartJenis) chartJenis.destroy();
     chartJenis = new Chart(ctx, {
       type: "bar",
@@ -397,22 +461,26 @@
         scales:{ x:{ ticks:{ color:"#a7b0c0" }}, y:{ ticks:{ color:"#a7b0c0" }}}
       }
     });
-
-    // Top 10 peserta (30 hari)
-    const top = Array.from(byNik.entries()).sort((a,b)=> b[1]-a[1]).slice(0,10);
-    $("#tblTop").innerHTML = top.map(([nik,total])=>{
-      const thr = pickThreshold(total);
-      const p = rows30.find(r=> r.nik===nik) || {};
-      return `<tr>
-        <td>${escapeHtml(nik)}</td>
-        <td>${escapeHtml(p.nama||"")}</td>
-        <td><b>${total}</b></td>
-        <td>${escapeHtml(thr.status)}</td>
-      </tr>`;
-    }).join("");
-
-    if(!silent) toast("Dashboard diperbarui.");
   }
+
+  // Top 10 peserta (mengikuti range)
+  const top = Array.from(byNik.entries())
+    .sort((a,b)=> b[1]-a[1])
+    .slice(0,10);
+
+  $("#tblTop").innerHTML = top.map(([nik,total])=>{
+    const thr = pickThreshold(total);
+    const p = rowsRange.find(r=> r.nik===nik) || {};
+    return `<tr>
+      <td>${escapeHtml(nik)}</td>
+      <td>${escapeHtml(p.nama||"")}</td>
+      <td><b>${total}</b></td>
+      <td>${escapeHtml(thr.status)}</td>
+    </tr>`;
+  }).join("");
+
+  if(!silent) toast("Dashboard diperbarui.");
+}
 
   async function renderQueueKpi(){
     const queue = await IDB.queryIndex("violations", "synced", false);
@@ -652,6 +720,22 @@
 
     await ensureSeeded();
     initTabs();
+    // Dashboard period controls
+    const dp = $("#dashPeriod");
+    if(dp){
+      const toggleCustom = ()=>{
+        const isCustom = dp.value === "custom";
+        $("#dashFrom").style.display = isCustom ? "inline-block" : "none";
+        $("#dashTo").style.display = isCustom ? "inline-block" : "none";
+      };
+      dp.addEventListener("change", async ()=>{
+        toggleCustom();
+        await refreshDashboard(true);
+      });
+      $("#dashFrom")?.addEventListener("change", ()=> refreshDashboard(true));
+      $("#dashTo")?.addEventListener("change", ()=> refreshDashboard(true));
+      toggleCustom();
+    }
     wireInstall();
     wireQr();
     wireDataTab();

@@ -41,22 +41,22 @@
   <section id="tab-dash" class="panel">
     <div class="grid cards">
       <div class="card">
-        <div class="label">Pelanggaran (Hari ini)</div>
+        <div class="label"><span class="kpiIcon">📌</span> Pelanggaran (Hari ini)</div>
         <div id="kpiToday" class="kpi">0</div>
         <div id="kpiTodaySub" class="muted">—</div>
       </div>
       <div class="card">
-        <div class="label">Total Poin (30 hari)</div>
+        <div class="label"><span class="kpiIcon">🧮</span> Total Poin (30 hari)</div>
         <div id="kpiPoints30" class="kpi">0</div>
         <div id="kpiPoints30Sub" class="muted">—</div>
       </div>
       <div class="card">
-        <div class="label">Peserta Bermasalah (≥ 50 poin)</div>
+        <div class="label"><span class="kpiIcon">⚠️</span> Peserta Bermasalah (≥ 50 poin)</div>
         <div id="kpiRisk" class="kpi">0</div>
         <div id="kpiRiskSub" class="muted">—</div>
       </div>
       <div class="card">
-        <div class="label">Antrian Sync</div>
+        <div class="label"><span class="kpiIcon">🔄</span> Antrian Sync</div>
         <div id="kpiQueue" class="kpi">0</div>
         <div id="kpiQueueSub" class="muted">—</div>
       </div>
@@ -65,8 +65,20 @@
     <div class="grid two">
       <div class="card">
         <div class="row">
-          <div class="label">Komposisi Jenis Pelanggaran (30 hari)</div>
-          <div class="muted" id="dashRange"></div>
+          <div>
+            <div class="label">Komposisi Jenis Pelanggaran</div>
+            <div class="muted" id="dashRange"></div>
+          </div>
+          <div class="row" style="gap:8px">
+            <select id="dashPeriod" style="max-width:180px">
+              <option value="today">Hari ini</option>
+              <option value="7">7 hari</option>
+              <option value="30" selected>30 hari</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input id="dashFrom" type="date" style="max-width:150px; display:none">
+            <input id="dashTo" type="date" style="max-width:150px; display:none">
+          </div>
         </div>
         <canvas id="chartJenis" height="140"></canvas>
       </div>

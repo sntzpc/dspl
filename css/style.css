@@ -236,3 +236,39 @@ canvas{max-width:100%}
   background:var(--success-color) !important;
   color:#fff !important;
 }
+
+/* ===== Dashboard enhancements (dspld-like) ===== */
+.kpiIcon{margin-right:6px; opacity:.85}
+
+.grid.cards .card{
+  position:relative;
+  overflow:hidden;
+}
+
+.grid.cards .card::after{
+  content:"";
+  position:absolute;
+  right:-40px;
+  top:-40px;
+  width:120px;height:120px;
+  background:rgba(52,152,219,.12);
+  border-radius:999px;
+}
+
+.grid.cards .card .label{
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+
+.grid.cards .card .kpi{
+  font-size:2.2rem;
+  letter-spacing:.5px;
+}
+
+#dashPeriod, #dashFrom, #dashTo{
+  padding:10px 12px;
+  border-radius:8px;
+  border:1px solid rgba(0,0,0,.12);
+  background:#fff;
+}
