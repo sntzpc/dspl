@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Dashboard Pelanggaran Disiplin - Training Center</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0b1220">
+  <link rel="icon" href="assets/icon-192.png">
+  <link rel="stylesheet" href="css/style.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script defer src="https://unpkg.com/html5-qrcode"></script>
+  <script defer src="js/idb.js"></script>
+  <script defer src="js/config.js"></script>
+  <script defer src="js/app.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">TC</div>
+    <div>
+      <div class="title">Pelanggaran Disiplin Peserta</div>
+      <div class="subtitle">Offline-first • Sync ke Google</div>
+    </div>
+  </div>
+  <div class="right">
+    <span id="netBadge" class="badge">offline</span>
+    <button id="btnInstall" class="btn ghost" style="display:none">Install</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="dash">Dashboard</button>
+  <button class="tab" data-tab="input">Input</button>
+  <button class="tab" data-tab="data">Data</button>
+  <button class="tab" data-tab="sync">Sinkronisasi</button>
+</nav>
+
+<main class="container">
+  <!-- DASHBOARD -->
+  <section id="tab-dash" class="panel">
+    <div class="grid cards">
+      <div class="card">
+        <div class="label">Pelanggaran (Hari ini)</div>
+        <div id="kpiToday" class="kpi">0</div>
+        <div id="kpiTodaySub" class="muted">—</div>
+      </div>
+      <div class="card">
+        <div class="label">Total Poin (30 hari)</div>
+        <div id="kpiPoints30" class="kpi">0</div>
+        <div id="kpiPoints30Sub" class="muted">—</div>
+      </div>
+      <div class="card">
+        <div class="label">Peserta Bermasalah (≥ 50 poin)</div>
+        <div id="kpiRisk" class="kpi">0</div>
+        <div id="kpiRiskSub" class="muted">—</div>
+      </div>
+      <div class="card">
+        <div class="label">Antrian Sync</div>
+        <div id="kpiQueue" class="kpi">0</div>
+        <div id="kpiQueueSub" class="muted">—</div>
+      </div>
+    </div>
+
+    <div class="grid two">
+      <div class="card">
+        <div class="row">
+          <div class="label">Komposisi Jenis Pelanggaran (30 hari)</div>
+          <div class="muted" id="dashRange"></div>
+        </div>
+        <canvas id="chartJenis" height="140"></canvas>
+      </div>
+      <div class="card">
+        <div class="row">
+          <div class="label">Top 10 Peserta (Total Poin 30 hari)</div>
+          <button id="btnRefreshDash" class="btn ghost">Refresh</button>
+        </div>
+        <div class="tableWrap">
+          <table class="table">
+            <thead><tr><th>NIK</th><th>Nama</th><th>Poin</th><th>Status</th></tr></thead>
+            <tbody id="tblTop"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- INPUT -->
+  <section id="tab-input" class="panel" style="display:none">
+    <div class="card">
+      <div class="row">
+        <div>
+          <div class="label">Form Input Pelanggaran</div>
+          <div class="muted">Pilih peserta (manual/sugesti) atau scan QR (isi QR cukup NIK saja).</div>
+        </div>
+        <div class="row" style="gap:8px">
+          <button id="btnScan" class="btn">Scan QR</button>
+          <button id="btnClearForm" class="btn ghost">Reset</button>
+        </div>
+      </div>
+
+      <div class="grid form">
+        <div>
+          <label>NIK / Nama</label>
+          <input id="inpPeserta" list="dlPeserta" placeholder="Ketik NIK atau beberapa huruf nama..." autocomplete="off" />
+          <datalist id="dlPeserta"></datalist>
+          <div id="pesertaInfo" class="muted small"></div>
+        </div>
+
+        <div>
+          <label>Jenis Pelanggaran</label>
+          <select id="selPelanggaran"></select>
+          <div id="pelInfo" class="muted small"></div>
+        </div>
+
+        <div>
+          <label>Poin</label>
+          <input id="inpPoin" type="number" min="0" step="1" />
+          <div class="muted small">Otomatis dari master (boleh disesuaikan jika ada kasus khusus).</div>
+        </div>
+
+        <div>
+          <label>Tanggal & Jam</label>
+          <input id="inpWaktu" type="datetime-local" />
+          <div class="muted small">Default: sekarang.</div>
+        </div>
+
+        <div>
+          <label>Petugas</label>
+          <input id="inpPetugas" placeholder="Nama petugas pencatat" />
+          <div class="muted small">Tersimpan di perangkat.</div>
+        </div>
+
+        <div>
+          <label>Catatan</label>
+          <input id="inpCatatan" placeholder="Catatan singkat (opsional)" />
+          <div class="muted small">Contoh: lokasi, saksi, dll.</div>
+        </div>
+      </div>
+
+      <div class="grid two">
+        <div class="card subtle">
+          <div class="label">Status Otomatis Peserta (akumulasi 30 hari)</div>
+          <div id="autoStatus" class="kpi" style="font-size:24px">—</div>
+          <div id="autoKonsekuensi" class="muted">—</div>
+          <div class="muted small">Mengikuti ambang batas: 0–30 Aman, 31–49 Warning, 50–79 Disiplin Keras, 80–99 Critical, 100 Gagal.</div>
+        </div>
+        <div class="card subtle">
+          <div class="row">
+            <div>
+              <div class="label">Sanksi (jika poin ≥ 50)</div>
+              <div class="muted small">Pilih salah satu, sesuai kebijakan sidang/pembina.</div>
+            </div>
+          </div>
+          <select id="selSanksi"></select>
+          <div class="muted small" id="sanksiHint"></div>
+        </div>
+      </div>
+
+      <div class="row end">
+        <button id="btnSave" class="btn primary">Simpan (Lokal)</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <div class="label">Riwayat Terakhir (Lokal)</div>
+        <div class="row" style="gap:8px">
+          <button id="btnExportCsv" class="btn ghost">Export CSV</button>
+          <button id="btnClearLocal" class="btn danger ghost">Hapus Data Lokal</button>
+        </div>
+      </div>
+      <div class="tableWrap">
+        <table class="table">
+          <thead><tr><th>Waktu</th><th>NIK</th><th>Nama</th><th>Pelanggaran</th><th>Poin</th><th>Status</th><th>Sync</th></tr></thead>
+          <tbody id="tblRecent"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- DATA -->
+  <section id="tab-data" class="panel" style="display:none">
+    <div class="card">
+      <div class="row">
+        <div class="label">Data Lokal (IndexedDB)</div>
+        <div class="row" style="gap:8px">
+          <input id="inpFilter" placeholder="Filter: nik / nama / pelanggaran..." />
+          <button id="btnReloadData" class="btn ghost">Reload</button>
+        </div>
+      </div>
+      <div class="tableWrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Waktu</th><th>NIK</th><th>Nama</th><th>Jenis</th><th>Poin</th><th>Petugas</th><th>Status</th><th>Sanksi</th><th>Sync</th>
+            </tr>
+          </thead>
+          <tbody id="tblAll"></tbody>
+        </table>
+      </div>
+      <div class="muted small">Tip: gunakan “Sinkronisasi” untuk kirim ke Google Sheet.</div>
+    </div>
+  </section>
+
+  <!-- SYNC -->
+  <section id="tab-sync" class="panel" style="display:none">
+    <div class="grid two">
+      <div class="card" style="display:none">
+        <div class="label">Koneksi Google Apps Script</div>
+        <div class="muted small">Tempel URL Web App (…/exec) dan API Key (opsional) dari Apps Script.</div>
+        <div class="grid form">
+          <div>
+            <label>GAS Web App URL</label>
+            <input id="inpGasUrl" placeholder="https://script.google.com/macros/s/xxxx/exec" />
+          </div>
+          <div>
+            <label>API Key</label>
+            <input id="inpApiKey" placeholder="(opsional) sama dengan di Code.gs" />
+          </div>
+        </div>
+        <div class="row end">
+          <button id="btnSaveCfg" class="btn">Simpan Setting</button>
+        </div>
+        <div id="cfgInfo" class="muted small"></div>
+      </div>
+
+      <div class="card">
+        <div class="label">Sinkronisasi</div>
+        <div class="muted small">Mode offline: semua data tetap aman di perangkat. Sync bisa dilakukan kapan saja.</div>
+        <div class="grid form">
+          <button id="btnSyncUp" class="btn primary">Sync Up (Kirim Antrian)</button>
+          <button id="btnPullMaster" class="btn">Pull Master (Peserta + Pelanggaran)</button>
+          <button id="btnPullLogs" class="btn">Tarik Data Pelanggaran dari Google Sheet</button>
+        </div>
+        <div class="muted small" id="syncInfo"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="label">Panduan Singkat</div>
+      <ol class="muted">
+        <li>Jalankan <b>Apps Script</b> (Code.gs) untuk membuat struktur Google Sheet dan publish sebagai Web App.</li>
+        <li>Tempel URL Web App ke kolom di atas, lalu klik <b>Simpan Setting</b>.</li>
+        <li>Klik <b>Pull Master</b> untuk mengisi daftar peserta dan master pelanggaran.</li>
+        <li>Input pelanggaran di tab <b>Input</b> (offline bisa).</li>
+        <li>Klik <b>Sync Up</b> saat internet tersedia.</li>
+      </ol>
+    </div>
+  </section>
+</main>
+
+<!-- QR MODAL -->
+<div id="qrModal" class="modal" style="display:none">
+  <div class="modalCard">
+    <div class="row">
+      <div class="label">Scan QR Code (NIK)</div>
+      <button id="btnCloseQr" class="btn ghost">Tutup</button>
+    </div>
+    <div id="qrReader" style="width: min(420px, 95vw)"></div>
+    <div class="muted small">Catatan: untuk keamanan, QR cukup berisi NIK angka saja.</div>
+  </div>
+</div>
+
+<footer class="footer muted small">
+  Versi v1.0 • Training Center Head • Offline-first
+</footer>
+
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{}));
+  }
+</script>
+</body>
+</html>
