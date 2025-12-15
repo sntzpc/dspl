@@ -91,7 +91,7 @@
       <div class="row">
         <div>
           <div class="label">Form Input Pelanggaran</div>
-          <div class="muted">Pilih peserta (manual/sugesti) atau scan QR (isi QR cukup NIK saja).</div>
+          <div class="muted">Pilih peserta</div>
         </div>
         <div class="row" style="gap:8px">
           <button id="btnScan" class="btn">Scan QR</button>
@@ -116,7 +116,7 @@
         <div>
           <label>Poin</label>
           <input id="inpPoin" type="number" min="0" step="1" />
-          <div class="muted small">Otomatis dari master (boleh disesuaikan jika ada kasus khusus).</div>
+          <div class="muted small">(boleh disesuaikan jika perlu).</div>
         </div>
 
         <div>
@@ -128,7 +128,7 @@
         <div>
           <label>Petugas</label>
           <input id="inpPetugas" placeholder="Nama petugas pencatat" />
-          <div class="muted small">Tersimpan di perangkat.</div>
+          <div class="muted small"></div>
         </div>
 
         <div>
@@ -140,10 +140,10 @@
 
       <div class="grid two">
         <div class="card subtle">
-          <div class="label">Status Otomatis Peserta (akumulasi 30 hari)</div>
+          <div class="label">Status Peserta (akumulasi 30 hari)</div>
           <div id="autoStatus" class="kpi" style="font-size:24px">—</div>
           <div id="autoKonsekuensi" class="muted">—</div>
-          <div class="muted small">Mengikuti ambang batas: 0–30 Aman, 31–49 Warning, 50–79 Disiplin Keras, 80–99 Critical, 100 Gagal.</div>
+          <div class="muted small">Ambang batas: 0–30 Aman, 31–49 Warning, 50–79 Disiplin Keras, 80–99 Critical, 100 Gagal.</div>
         </div>
         <div class="card subtle">
           <div class="row">
@@ -158,13 +158,13 @@
       </div>
 
       <div class="row end">
-        <button id="btnSave" class="btn primary">Simpan (Lokal)</button>
+        <button id="btnSave" class="btn primary">Simpan</button>
       </div>
     </div>
 
     <div class="card">
       <div class="row">
-        <div class="label">Riwayat Terakhir (Lokal)</div>
+        <div class="label">Riwayat Terakhir</div>
         <div class="row" style="gap:8px">
           <button id="btnExportCsv" class="btn ghost">Export CSV</button>
           <button id="btnClearLocal" class="btn danger ghost">Hapus Data Lokal</button>
@@ -183,7 +183,7 @@
   <section id="tab-data" class="panel" style="display:none">
     <div class="card">
       <div class="row">
-        <div class="label">Data Lokal (IndexedDB)</div>
+        <div class="label">Data Lokal</div>
         <div class="row" style="gap:8px">
           <input id="inpFilter" placeholder="Filter: nik / nama / pelanggaran..." />
           <button id="btnReloadData" class="btn ghost">Reload</button>
