@@ -756,24 +756,79 @@
     toast("Sync Up selesai ✅");
   }
 
+  function uniqBy(arr, keyFn){
+    const m = new Map();
+    for(const it of (arr||[])){
+      const k = keyFn(it);
+      if(!k) continue;
+      if(!m.has(k)) m.set(k, it);
+    }
+    return Array.from(m.values());
+  }
+
+  function normNik(v){
+    const s = String(v ?? "").trim();
+    // boleh angka saja, minimal 6 digit (sesuai validasi Anda)
+    if(!/^\d{6,}$/.test(s)) return "";
+    return s;
+  }
+
+  function normId(v){
+    const s = String(v ?? "").trim();
+    return s ? s : "";
+  }
 
 
-  async function pullMaster(){
+  async function pullMaster(opts = {}){
     const a = loadAuth();
-    if(a && a.role === "user") throw new Error("Mode user: tidak diizinkan pull.");
-    $("#syncInfo").textContent = "Mengambil master (peserta + pelanggaran)...";
-    const js = await gasFetch("getMaster");
-    const peserta = (js.participants || []).map(p=>({...p, nik:String(p.nik).trim()}));
-    const pel = js.violations || [];
-    if(peserta.length) await IDB.bulkPut("participants", peserta);
-    if(pel.length) await IDB.bulkPut("masterViolations", pel);
-    if(js.sanctions) await IDB.setMeta("sanctions", js.sanctions);
-    if(js.thresholds) await IDB.setMeta("thresholds", js.thresholds);
+    // default: blok user (sesuai desain tab sync)
+    // tapi kalau dipanggil dari login (auto pull), kita izinkan pakai opts.force = true
+    if(!opts.force && a && a.role === "user") throw new Error("Mode user: tidak diizinkan pull.");
+
+    const syncInfo = $("#syncInfo");
+    if(syncInfo) syncInfo.textContent = "Mengambil master (peserta + pelanggaran)...";
+
+    const js = await gasFetch("getMaster", null, "GET");
+
+    // --- sanitize participants ---
+    const rawPeserta = (js.participants || []).map(p => ({
+      ...p,
+      nik: normNik(p.nik),
+      nama: String(p.nama ?? "").trim(),
+    }));
+    // buang nik kosong, dedupe by nik
+    const peserta = uniqBy(rawPeserta.filter(p => p.nik), p => p.nik);
+
+    // --- sanitize master violations ---
+    const rawPel = (js.violations || []).map(v => ({
+      ...v,
+      id: normId(v.id),
+      jenis: String(v.jenis ?? "").trim(),
+      kategori: String(v.kategori ?? "Umum").trim(),
+      poin: Number(v.poin || 0),
+    }));
+    // buang id kosong, dedupe by id
+    const pel = uniqBy(rawPel.filter(v => v.id), v => v.id);
+
+    // --- save to IDB (guard) ---
+    try{
+      if(peserta.length) await IDB.bulkPut("participants", peserta);
+      if(pel.length) await IDB.bulkPut("masterViolations", pel);
+      if(js.sanctions) await IDB.setMeta("sanctions", js.sanctions);
+      if(js.thresholds) await IDB.setMeta("thresholds", js.thresholds);
+    }catch(e){
+      // kasih pesan jelas biar gampang debug
+      throw new Error("Gagal simpan master ke database lokal: " + (e.message || e));
+    }
 
     await renderMaster();
-    $("#syncInfo").textContent = `Master terisi: peserta ${peserta.length}, pelanggaran ${pel.length}.`;
+
+    if(syncInfo) syncInfo.textContent = `Master terisi: peserta ${peserta.length}, pelanggaran ${pel.length}.`;
     toast("Pull master selesai ✅");
+
+    return { peserta: peserta.length, pelanggaran: pel.length };
   }
+
 
   async function pullLogs(){
     const a = loadAuth();
@@ -1113,7 +1168,7 @@
         if(hintEl) hintEl.textContent = "NIK belum ada. Mengambil Master dari Google Sheet...";
 
         // gunakan fungsi existing (boleh), karena saat ini belum login jadi tidak kena role-block
-        await pullMaster();
+        await pullMaster({ force:true });
 
         // cek ulang
         part = await IDB.get("participants", nik);
