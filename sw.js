@@ -1,4 +1,4 @@
-const CACHE_NAME = "tc-pelanggaran-v35"; // naikkan versi agar SW baru aktif
+const CACHE_NAME = "tc-pelanggaran-v40"; // naikkan versi agar SW baru aktif
 const ASSETS = [
   "./",
   "./index.html",
