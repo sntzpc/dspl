@@ -906,6 +906,27 @@
       }
     }
 
+    function bindTap(btn, fn){
+    if(!btn) return;
+
+    const handler = (e)=>{
+      // cegah “tap dianggap scroll” & cegah event dobel
+      e.preventDefault?.();
+      e.stopPropagation?.();
+      fn();
+    };
+
+    // pointerup = paling stabil di HP (Android+iOS modern)
+    btn.addEventListener("pointerup", handler, { passive:false });
+
+    // fallback untuk browser lama
+    btn.addEventListener("touchend", handler, { passive:false });
+
+    // fallback umum desktop
+    btn.addEventListener("click", handler);
+  }
+
+
     // ===== tombol =====
     const btnSyncUp = $("#btnSyncUp");
     const btnPullMaster = $("#btnPullMaster");
@@ -930,32 +951,21 @@
 
     // ===== 3) ADMIN: pasang handler dengan anti double-click =====
     if(btnSyncUp){
-      btnSyncUp.addEventListener("click", ()=>{
-        safeRun(
-          btnSyncUp,
-          async ()=>{ await syncUp(); },
-          "⏳ Syncing..."
-        );
+      bindTap(btnSyncUp, ()=>{
+        safeRun(btnSyncUp, async ()=>{ await syncUp(); }, "⏳ Syncing...");
       });
     }
 
     if(btnPullMaster){
-      btnPullMaster.addEventListener("click", ()=>{
-        safeRun(
-          btnPullMaster,
-          async ()=>{ await pullMaster(); },
-          "⏳ Pull Master..."
-        );
+      bindTap(btnPullMaster, ()=>{
+        safeRun(btnPullMaster, async ()=>{ await pullMaster(); }, "⏳ Pull Master...");
       });
     }
 
+
     if(btnPullLogs){
-      btnPullLogs.addEventListener("click", ()=>{
-        safeRun(
-          btnPullLogs,
-          async ()=>{ await pullLogs(); },
-          "⏳ Pull Logs..."
-        );
+      bindTap(btnPullLogs, ()=>{
+        safeRun(btnPullLogs, async ()=>{ await pullLogs(); }, "⏳ Pull Logs...");
       });
     }
   }
