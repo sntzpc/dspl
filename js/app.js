@@ -938,6 +938,8 @@
 
     async function safeRun(btn, fn, loadingText){
       console.log("BTN TAP:", btn?.id);
+      const info = $("#syncInfo");
+      if(info) info.textContent = `Menjalankan: ${btn?.id || "-"} ...`;
       if(!btn || btn.dataset._locked === "1") return;
       lockBtn(btn, loadingText);
       try{
@@ -957,19 +959,33 @@
       if(btn.dataset._tapBound === "1") return;
       btn.dataset._tapBound = "1";
 
-      const handler = (e)=>{
-        e.preventDefault?.();
-        e.stopPropagation?.();
+      // guard agar tidak double-run (karena kita pasang beberapa event)
+      let lastRun = 0;
+
+      const run = (e)=>{
+        const nowTs = Date.now();
+        if(nowTs - lastRun < 350) return; // anti double fire
+        lastRun = nowTs;
+
+        try{
+          e?.preventDefault?.();
+          e?.stopPropagation?.();
+        }catch(_){}
+
         fn();
       };
 
+      // 1) Paling kompatibel untuk tombol di HP/PWA
+      btn.addEventListener("click", run, { passive:false });
+
+      // 2) Tambahan: pointer & touch (optional)
       if(window.PointerEvent){
-        btn.addEventListener("pointerup", handler, { passive:false });
+        btn.addEventListener("pointerup", run, { passive:false });
       }else{
-        // fallback browser lama
-        btn.addEventListener("click", handler);
+        btn.addEventListener("touchend", run, { passive:false });
       }
     }
+
 
 
 
