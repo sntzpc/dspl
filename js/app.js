@@ -755,6 +755,18 @@
     return js;
   }
 
+  async function testPing(){
+    try{
+      const js = await gasFetch("ping", null, "GET");
+      toast("PING OK: " + (js.message || "pong"));
+      console.log("PING RESPONSE:", js);
+    }catch(e){
+      toast("PING GAGAL: " + e.message);
+      console.error("PING ERROR:", e);
+    }
+  }
+
+
 
   async function syncUp(){
     const a = loadAuth();
@@ -895,6 +907,12 @@
     const cfg = loadCfg();
     const a = loadAuth();
     const isUser = a && a.role === "user";
+    const btnTestPing = $("#btnTestPing");
+    if(btnTestPing){
+      btnTestPing.addEventListener("click", ()=>{
+        testPing();
+      });
+    }
 
     // ===== 1) Selalu tampilkan config (read-only) =====
     const gasEl = $("#inpGasUrl");
@@ -1024,12 +1042,12 @@
       });
     }
 
-
     if(btnPullLogs){
       bindTap(btnPullLogs, ()=>{
         safeRun(btnPullLogs, async ()=>{ await pullLogs(); }, "⏳ Pull Logs...");
       });
     }
+    setTimeout(()=> testPing(), 1200);
   }
 
 
