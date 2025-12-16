@@ -894,6 +894,7 @@
     }
 
     async function safeRun(btn, fn, loadingText){
+      console.log("BTN TAP:", btn?.id);
       if(!btn || btn.dataset._locked === "1") return;
       lockBtn(btn, loadingText);
       try{
