@@ -105,7 +105,7 @@
 
 
   // ====== HARD-CODE GAS CONFIG (tanam permanen) ======
-  const HARD_GAS_URL = "https://script.google.com/macros/s/AKfycbwwk4W2skF6xkSoec3laTEGdHbe4Z7E6vJkfS6tGjwUI18Z960n8rbqUPuRE-axz9Ww/exec";
+  const HARD_GAS_URL = "https://script.google.com/macros/s/AKfycbyyRvNuM6b4qxI0VjGTyqer0xlnSvVp_7vT5sIX6GigX5Kjcxd9QsOhfPOFrFiNfeHa/exec";
   const HARD_API_KEY = "sntz2025"; // boleh "" jika tidak dipakai
   // ====== END HARD-CODE ======
 
