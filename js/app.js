@@ -670,7 +670,6 @@
       const cb = "__cb_" + Math.random().toString(16).slice(2);
       const u = new URL(url);
 
-      // wajib: callback + cache-buster (hindari cache/SW/redirect aneh di HP)
       u.searchParams.set("callback", cb);
       u.searchParams.set("_ts", String(Date.now()));
 
@@ -697,9 +696,12 @@
         resolve(data);
       };
 
+      // ✅ penting untuk Chrome Android
       s.async = true;
-      s.defer = true;
-      s.referrerPolicy = "no-referrer";
+      s.type = "text/javascript";
+      // HAPUS referrerPolicy no-referrer (kadang bikin Chrome “aneh” untuk script.google.com)
+      // s.referrerPolicy = "no-referrer";
+      s.crossOrigin = "anonymous";
 
       s.onerror = ()=>{
         if(done) return;
@@ -714,6 +716,7 @@
   }
 
 
+
   // POST tanpa preflight & tanpa baca response (hindari CORS)
   async function postNoCors(url, payload){
     // text/plain = "simple request" -> tidak memicu OPTIONS preflight
@@ -726,6 +729,34 @@
     return { ok:true }; // response opaque (tidak bisa dibaca)
   }
 
+  async function warmUpGas(action="ping"){
+      const cfg = loadCfg();
+      const url = new URL(cfg.gasUrl);
+      url.searchParams.set("action", action);
+      if(cfg.apiKey) url.searchParams.set("key", cfg.apiKey);
+      url.searchParams.set("_warm", String(Date.now()));
+
+      // 1) fetch no-cors (cuma “nembak”, tidak baca response)
+      try{
+        await fetch(url.toString(), { mode:"no-cors", cache:"no-store" });
+      }catch(_){}
+
+      // 2) optional: iframe warm-up (kadang bantu Chrome yang suka redirect)
+      try{
+        await new Promise((res)=>{
+          const ifr = document.createElement("iframe");
+          ifr.style.display = "none";
+          ifr.src = url.toString();
+          document.body.appendChild(ifr);
+          setTimeout(()=>{
+            ifr.remove();
+            res();
+          }, 900);
+        });
+      }catch(_){}
+    }
+
+
 
   // ====== GAS API ======
   async function gasFetch(action, payload=null, method=null){
@@ -736,17 +767,24 @@
     url.searchParams.set("action", action);
     if(cfg.apiKey) url.searchParams.set("key", cfg.apiKey);
 
-    // GET -> gunakan JSONP (bebas CORS)
+    // GET -> JSONP (bebas CORS) + retry untuk Chrome Android
     if(!payload && (!method || method === "GET")){
-      const js = await jsonp(url.toString(), 25000);
-      if(!js || js.ok === false) throw new Error((js && js.message) || "Gagal (JSONP).");
-      return js;
+      try{
+        const js = await jsonp(url.toString(), 25000);
+        if(!js || js.ok === false) throw new Error((js && js.message) || "Gagal (JSONP).");
+        return js;
+      }catch(e){
+        await warmUpGas(action);
+        const js2 = await jsonp(url.toString(), 25000);
+        if(!js2 || js2.ok === false) throw new Error((js2 && js2.message) || "Gagal (JSONP setelah warm-up).");
+        return js2;
+      }
     }
 
-    // POST -> gunakan no-cors (hindari preflight CORS)
+    // POST -> no-cors (hindari preflight & CORS)
     if(payload && (!method || method === "POST")){
       await postNoCors(url.toString(), payload);
-      return { ok:true }; // tidak ada ids karena opaque
+      return { ok:true };
     }
 
     // fallback
@@ -754,6 +792,7 @@
     if(!js || js.ok === false) throw new Error((js && js.message) || "Gagal (fallback).");
     return js;
   }
+
 
   async function testPing(){
     try{
@@ -1409,7 +1448,7 @@
     await refreshRecent();
     await refreshDashboard(true);
 
-    $("#btnRefreshDash").addEventListener("click", ()=> refreshDashboard());
+    $("#btnRefreshDash")?.addEventListener("click", ()=> refreshDashboard());
   }
 
   boot().catch(e=>{
