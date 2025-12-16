@@ -1480,13 +1480,25 @@
   // ====== boot ======
   async function boot(){
     // ===== Helpers: bind once =====
-    const bindOnce = (el, ev, fn, opt)=>{
-      if(!el) return;
-      const key = `_bound_${ev}`;
-      if(el.dataset[key] === "1") return;
-      el.dataset[key] = "1";
-      el.addEventListener(ev, fn, opt);
+    // ===== Helpers: bind once (support window/document/element) =====
+    const __bindOnceMap = boot.__bindOnceMap || (boot.__bindOnceMap = new WeakMap());
+
+    const bindOnce = (target, ev, fn, opt)=>{
+      if(!target || !target.addEventListener) return;
+
+      let reg = __bindOnceMap.get(target);
+      if(!reg){
+        reg = Object.create(null);
+        __bindOnceMap.set(target, reg);
+      }
+
+      const key = String(ev);
+      if(reg[key]) return;
+
+      reg[key] = true;
+      target.addEventListener(ev, fn, opt);
     };
+
 
     const clickOnce = (sel, fn)=>{
       bindOnce($(sel), "click", fn, { passive:false });
