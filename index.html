@@ -52,10 +52,13 @@
         <div id="kpiPoints30" class="kpi">0</div>
         <div id="kpiPoints30Sub" class="muted">—</div>
       </div>
-      <div class="card">
-        <div class="label"><span class="kpiIcon">⚠️</span> Peserta Bermasalah (≥ 50 poin)</div>
+      <div class="card kpi-clickable" id="cardRisk">
+        <div class="label">
+          <span class="kpiIcon">⚠️</span> Peserta Bermasalah (≥ 50 poin)
+        </div>
         <div id="kpiRisk" class="kpi">0</div>
         <div id="kpiRiskSub" class="muted">—</div>
+        <div class="kpiHint">Ketuk untuk melihat daftar peserta</div>
       </div>
       <div class="card">
         <div class="label"><span class="kpiIcon">🔄</span> Antrian Sync</div>
@@ -82,14 +85,16 @@
             <input id="dashTo" type="date" style="max-width:150px; display:none">
           </div>
         </div>
-        <canvas id="chartJenis" height="140"></canvas>
+        <div class="chartWrap">
+          <canvas id="chartJenis" height="140"></canvas>
+        </div>
       </div>
       <div class="card">
         <div class="row">
           <div class="label">Top 10 Peserta (Total Poin 30 hari)</div>
           <button id="btnRefreshDash" class="btn ghost">Refresh</button>
         </div>
-        <div class="tableWrap">
+        <div class="tableWrap tableWrapTop">
           <table class="table">
             <thead><tr><th>NIK</th><th>Nama</th><th>Poin</th><th>Status</th></tr></thead>
             <tbody id="tblTop"></tbody>
@@ -166,7 +171,7 @@
               <div class="muted small">Pilih, sesuai kebijakan.</div>
             </div>
           </div>
-          <select id="selSanksi"></select>
+          <select id="selSanksi" multiple></select>
           <div class="muted small" id="sanksiHint"></div>
         </div>
       </div>
@@ -273,6 +278,34 @@
     </div>
     <div id="qrReader" style="width: min(420px, 95vw)"></div>
     <div class="muted small">Catatan: untuk keamanan, QR cukup berisi NIK saja.</div>
+  </div>
+</div>
+
+<!-- RISK MODAL -->
+<div id="riskModal" class="modal" style="display:none">
+  <div class="modalCard">
+    <div class="row">
+      <div>
+        <div class="label">Peserta Bermasalah (≥ 50 poin)</div>
+        <div class="muted small" id="riskModalSub">—</div>
+      </div>
+      <button id="btnCloseRisk" class="btn ghost">Tutup</button>
+    </div>
+
+    <div class="tableWrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>NIK</th>
+            <th>Nama</th>
+            <th>Total Poin</th>
+            <th>Status</th>
+            <th>Sanksi</th>
+          </tr>
+        </thead>
+        <tbody id="tblRisk"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 

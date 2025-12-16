@@ -274,11 +274,21 @@
 
     const sanctions = await getSanctions();
     const selS = $("#selSanksi");
-    selS.innerHTML = `<option value="">— pilih sanksi —</option>` + sanctions.map(s=>`<option value="${escapeAttr(s)}">${escapeHtml(s)}</option>`).join("");
+    /* multi-select: tidak pakai opsi kosong */
+    selS.innerHTML = sanctions.map(s=>`<option value="${escapeAttr(s)}">${escapeHtml(s)}</option>`).join("");
+
   }
 
   function escapeHtml(s){ return String(s||"").replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m])); }
   function escapeAttr(s){ return escapeHtml(s).replace(/"/g,"&quot;"); }
+
+  function getSelectedSanctions(){
+    const sel = $("#selSanksi");
+    if(!sel) return "";
+    const vals = Array.from(sel.selectedOptions || []).map(o=> String(o.value||"").trim()).filter(Boolean);
+    return vals.join(" | "); // simpan sebagai text gabungan
+  }
+
 
   // ====== Participant lookup ======
   async function resolveParticipant(inputValue){
@@ -361,7 +371,7 @@
     $("#btnClearForm").addEventListener("click", ()=>{
       $("#inpPeserta").value="";
       $("#inpCatatan").value="";
-      $("#selSanksi").value="";
+      Array.from($("#selSanksi").options || []).forEach(o=> o.selected = false);
       $("#inpWaktu").value = toLocalInputValue(now());
       $("#selPelanggaran").selectedIndex = 0;
       $("#selPelanggaran").dispatchEvent(new Event("change"));
@@ -415,7 +425,7 @@
     }
     saveUser({petugas});
 
-    const sanksi = $("#selSanksi").value || "";
+    const sanksi = getSelectedSanctions();
     const catatan = String($("#inpCatatan").value||"").trim();
 
     // status based on total points 30d including this record
@@ -425,7 +435,7 @@
 
     // enforce sanction selection if current record itself is >=50 OR afterTotal >=50
     if((poin>=50 || afterTotal>=50) && !sanksi){
-      toast("Poin ≥ 50: pilih salah satu sanksi terlebih dahulu.");
+      toast("Poin ≥ 50: pilih minimal 1 sanksi terlebih dahulu (boleh lebih dari 1).");
       return;
     }
 
@@ -456,7 +466,7 @@
     await IDB.put("violations", rec);
     toast("Tersimpan di lokal ✅");
     $("#inpCatatan").value="";
-    $("#selSanksi").value="";
+    Array.from($("#selSanksi").options || []).forEach(o=> o.selected = false);
     $("#inpWaktu").value = toLocalInputValue(now());
     await refreshRecent();
     await refreshDashboard(true);
@@ -595,11 +605,25 @@
     if(chartJenis) chartJenis.destroy();
     chartJenis = new Chart(ctx, {
       type: "bar",
-      data: { labels, datasets: [{ label: "Jumlah kejadian", data: vals }]},
+      data: {
+        labels,
+        datasets: [{
+          label: "Jumlah kejadian",
+          data: vals,
+          barThickness: 10,      // ✅ lebih kecil
+          maxBarThickness: 12,   // ✅ batas maksimum
+          categoryPercentage: 0.6, // ✅ jarak kategori lebih lega
+          barPercentage: 0.6       // ✅ bar jadi ~60% dari slotnya
+        }]
+      },
       options: {
-        responsive:true,
-        plugins:{ legend:{ display:false }},
-        scales:{ x:{ ticks:{ color:"#a7b0c0" }}, y:{ ticks:{ color:"#a7b0c0" }}}
+        responsive: true,
+        maintainAspectRatio: false, // ✅ lebih enak di mobile
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: "#a7b0c0" } },
+          y: { ticks: { color: "#a7b0c0" }, beginAtZero: true }
+        }
       }
     });
   }
@@ -633,6 +657,65 @@
     $("#kpiQueue").textContent = String(queue.length);
     $("#kpiQueueSub").textContent = queue.length ? "Perlu Sync Up" : "Semua data sudah tersinkron";
   }
+
+  async function openRiskModal(){
+      const m = $("#riskModal");
+      if(!m) return;
+
+      const all = await getVisibleViolations();
+      const { from, to, label } = getDashRange();
+      const fromTs = from.getTime();
+      const toTs   = to.getTime();
+
+      // data pada range dashboard
+      const rowsRange = (all || []).filter(r=>{
+        const ts = new Date(r.waktu).getTime();
+        return ts >= fromTs && ts < toTs;
+      });
+
+      // aggregate by nik
+      const map = new Map(); // nik -> {total, nama, sanctions:Set}
+      for(const r of rowsRange){
+        const nik = String(r.nik || "").trim();
+        if(!nik) continue;
+        if(!map.has(nik)){
+          map.set(nik, { nik, nama: r.nama || "", total: 0, sanctions: new Set() });
+        }
+        const obj = map.get(nik);
+        obj.total += Number(r.poin || 0);
+
+        // kumpulkan sanksi yang pernah diberikan
+        const s = String(r.sanksi || "").trim();
+        if(s) s.split("|").map(x=>x.trim()).filter(Boolean).forEach(x=> obj.sanctions.add(x));
+      }
+
+      // filter >=50, sort desc
+      const list = Array.from(map.values())
+        .filter(x=> x.total >= 50)
+        .sort((a,b)=> b.total - a.total);
+
+      $("#riskModalSub").textContent = `Periode: ${label} • ${list.length} peserta`;
+
+      $("#tblRisk").innerHTML = list.map(x=>{
+        const thr = pickThreshold(x.total);
+        const sanctions = Array.from(x.sanctions).join(" ; ");
+        return `<tr>
+          <td>${escapeHtml(x.nik)}</td>
+          <td>${escapeHtml(x.nama)}</td>
+          <td><b>${x.total}</b></td>
+          <td>${escapeHtml(thr.status)}</td>
+          <td>${escapeHtml(sanctions || "-")}</td>
+        </tr>`;
+      }).join("");
+
+      m.style.display = "flex";
+    }
+
+    function closeRiskModal(){
+      const m = $("#riskModal");
+      if(m) m.style.display = "none";
+    }
+
 
 
   // ====== CSV export ======
@@ -1396,60 +1479,119 @@
 
   // ====== boot ======
   async function boot(){
-    netUI();
-    window.addEventListener("online", netUI);
-    window.addEventListener("offline", netUI);
+    // ===== Helpers: bind once =====
+    const bindOnce = (el, ev, fn, opt)=>{
+      if(!el) return;
+      const key = `_bound_${ev}`;
+      if(el.dataset[key] === "1") return;
+      el.dataset[key] = "1";
+      el.addEventListener(ev, fn, opt);
+    };
 
+    const clickOnce = (sel, fn)=>{
+      bindOnce($(sel), "click", fn, { passive:false });
+    };
+
+    const onEnter = (sel, fn)=>{
+      const el = $(sel);
+      bindOnce(el, "keydown", (e)=>{
+        if(e.key === "Enter"){
+          e.preventDefault();
+          fn();
+        }
+      });
+    };
+
+    // ===== Network badge =====
+    netUI();
+    bindOnce(window, "online", netUI);
+    bindOnce(window, "offline", netUI);
+
+    // ===== Seed (once) =====
     await ensureSeeded();
-    // ===== LOGIN FIRST =====
+
+    // ===== Login first =====
     applyRoleUI();
     const a = loadAuth();
-    if(!a){
-      openLogin();
-    }
-    $("#btnLogin")?.addEventListener("click", ()=> doLogin().catch(err=> toast("Login gagal: " + err.message)));
-    $("#loginPass")?.addEventListener("keydown", (e)=>{ if(e.key==="Enter") $("#btnLogin")?.click(); });
-    $("#loginUser")?.addEventListener("keydown", (e)=>{ if(e.key==="Enter") $("#btnLogin")?.click(); });
+    if(!a) openLogin();
 
-    $("#btnLogout")?.addEventListener("click", ()=> logout().catch(()=>{}));
-    $("#loginModal")?.addEventListener("click", (e)=>{ if(e.target.id==="loginModal"){} }); // no close on backdrop
+    // Login actions
+    clickOnce("#btnLogin", ()=> doLogin().catch(err=> toast("Login gagal: " + (err.message || err))));
+    onEnter("#loginUser", ()=> $("#btnLogin")?.click());
+    onEnter("#loginPass", ()=> $("#btnLogin")?.click());
 
+    // Logout
+    clickOnce("#btnLogout", ()=> logout().catch(()=>{}));
+
+    // Backdrop login: no close (tetap aman, tidak ngapa-ngapain)
+    bindOnce($("#loginModal"), "click", (e)=>{
+      if(e.target?.id === "loginModal"){
+        // intentionally do nothing (no close on backdrop)
+      }
+    });
+
+    // ===== Tabs =====
     initTabs();
-    // Dashboard period controls
+
+    // ===== Dashboard period controls =====
     const dp = $("#dashPeriod");
-    if(dp){
+    if(dp && dp.dataset._wired !== "1"){
+      dp.dataset._wired = "1";
+
       const toggleCustom = ()=>{
         const isCustom = dp.value === "custom";
-        $("#dashFrom").style.display = isCustom ? "inline-block" : "none";
-        $("#dashTo").style.display = isCustom ? "inline-block" : "none";
+        const fromEl = $("#dashFrom");
+        const toEl   = $("#dashTo");
+        if(fromEl) fromEl.style.display = isCustom ? "inline-block" : "none";
+        if(toEl)   toEl.style.display   = isCustom ? "inline-block" : "none";
       };
-      dp.addEventListener("change", async ()=>{
+
+      bindOnce(dp, "change", async ()=>{
         toggleCustom();
         await refreshDashboard(true);
       });
-      $("#dashFrom")?.addEventListener("change", ()=> refreshDashboard(true));
-      $("#dashTo")?.addEventListener("change", ()=> refreshDashboard(true));
+
+      bindOnce($("#dashFrom"), "change", ()=> refreshDashboard(true));
+      bindOnce($("#dashTo"), "change", ()=> refreshDashboard(true));
+
       toggleCustom();
     }
+
+    // ===== Install PWA =====
     wireInstall();
-    window.addEventListener("keydown", (e)=>{
-      // Ctrl+Shift+P untuk ganti password admin
+
+    // Hotkey admin change password
+    bindOnce(window, "keydown", (e)=>{
       if(e.ctrlKey && e.shiftKey && (e.key === "P" || e.key === "p")){
         changeAdminPassword().catch(()=>{});
       }
     });
 
+    // ===== Other wiring =====
     wireQr();
     wireDataTab();
     wireSyncTab();
     wireInput();
 
+    // ===== Risk modal events =====
+    clickOnce("#btnCloseRisk", ()=> closeRiskModal());
+    bindOnce($("#riskModal"), "click", (e)=>{
+      if(e.target?.id === "riskModal") closeRiskModal();
+    });
+
+    // ===== Klik kartu KPI Risk (pakai ID khusus) =====
+    clickOnce("#cardRisk", ()=> openRiskModal().catch(()=>{}));
+    // cursor sudah dari CSS .card.kpi-clickable, jadi tidak perlu set style via JS
+
+    // ===== Initial render =====
     await renderMaster();
     await refreshRecent();
     await refreshDashboard(true);
 
-    $("#btnRefreshDash")?.addEventListener("click", ()=> refreshDashboard());
+    // Refresh dashboard button
+    clickOnce("#btnRefreshDash", ()=> refreshDashboard());
   }
+
 
   boot().catch(e=>{
     console.error(e);

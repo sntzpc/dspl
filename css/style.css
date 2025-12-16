@@ -289,3 +289,97 @@ button, .btn {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* ===== Mobile-safe horizontal scrolling for wide content ===== */
+body{
+  overflow-x: hidden; /* biar halaman tidak melebar sendiri */
+}
+
+/* khusus area chart: kalau canvas lebih lebar dari layar, bisa digeser */
+.chartWrap{
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* default canvas tetap responsif */
+canvas{max-width:100%}
+
+/* ===== Top 10 table: lebih “ringan” min-width daripada tabel data utama ===== */
+.tableWrapTop .table{
+  min-width: 620px; /* Top 10 biasanya tidak butuh 980px */
+}
+
+/* ===== Multi-select sanksi agar enak dipakai ===== */
+#selSanksi[multiple]{
+  min-height: 160px;
+  padding: 10px;
+}
+
+/* ===== Mobile tuning ===== */
+@media (max-width:768px){
+  /* kartu & layout */
+  .card{ padding:14px; }
+  .grid{ gap:12px; }
+
+  /* header & tabs */
+  .topbar{
+    margin:12px auto 10px;
+    padding:14px;
+  }
+  .tabs{
+    padding:0 12px;
+    gap:8px;
+  }
+  .tab{
+    padding:9px 12px;
+    font-size:.95rem;
+  }
+
+  /* chart: buat kanvas punya lebar minimum,
+     jadi kalau label banyak, user bisa geser */
+  .chartWrap canvas{
+    min-width: 640px; /* <-- membuat chart tidak "dipaksa" rapat di layar kecil */
+  }
+}
+
+/* ===== Clickable KPI Card (Peserta Bermasalah) ===== */
+.card.kpi-clickable{
+  cursor: pointer;
+  transition: transform .15s ease, box-shadow .15s ease, background-color .15s ease;
+}
+
+/* Desktop hover */
+@media (hover:hover){
+  .card.kpi-clickable:hover{
+    transform: translateY(-2px);
+    box-shadow: 0 6px 14px rgba(0,0,0,.15);
+    background: linear-gradient(
+      0deg,
+      rgba(243,156,18,.06),
+      rgba(243,156,18,.02)
+    );
+  }
+}
+
+/* Mobile tap feedback */
+.card.kpi-clickable:active{
+  transform: scale(.98);
+  box-shadow: 0 3px 8px rgba(0,0,0,.18);
+}
+
+/* Icon & angka sedikit disorot */
+.card.kpi-clickable .kpi{
+  transition: color .15s ease;
+}
+
+.card.kpi-clickable:hover .kpi,
+.card.kpi-clickable:active .kpi{
+  color: var(--warning-color);
+}
+
+/* Hint kecil di bawah (opsional) */
+.card.kpi-clickable .kpiHint{
+  font-size: .85rem;
+  color: var(--muted);
+  margin-top: 4px;
+}
