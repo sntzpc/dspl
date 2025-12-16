@@ -176,27 +176,34 @@ input:focus,select:focus{outline:2px solid rgba(52,152,219,.25);border-color:rgb
 
 /* ===== Tables ===== */
 .tableWrap{
-  overflow-x:auto;
-  max-height:320px;
-  overflow-y:auto;
-  border-radius:10px;
-  border:1px solid rgba(0,0,0,.06);
+  overflow-x: auto;               /* geser kiri-kanan jika kolom kepanjangan */
+  overflow-y: auto;               /* scroll vertikal */
+  max-height: 320px;
+  border-radius: 10px;
+  border: 1px solid rgba(0,0,0,.06);
+  -webkit-overflow-scrolling: touch;
 }
+
 .table{
-  width:100%;
-  border-collapse:collapse;
+  width: 100%;
+  min-width: 980px;               /* tabel boleh melebar supaya no-wrap tetap rapi */
+  border-collapse: collapse;
 }
-.table th,.table td{
-  padding:12px;
-  text-align:left;
-  border-bottom:1px solid rgba(0,0,0,.08);
+
+.table th,
+.table td{
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(0,0,0,.08);
+  white-space: nowrap;            /* ✅ NO WRAP (tidak turun baris) */
 }
+
 .table th{
-  background:var(--light-color);
-  font-weight:900;
-  position:sticky;
-  top:0;
-  z-index:1;
+  background: var(--light-color);
+  font-weight: 900;
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 /* ===== Chart area ===== */

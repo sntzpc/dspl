@@ -19,7 +19,7 @@
   <div class="brand">
     <div class="logo">TC</div>
     <div>
-      <div class="title">Pelanggaran Disiplin Peserta</div>
+      <div class="title">Pelanggaran Disiplin</div>
       <div class="subtitle">Offline-first • Sync ke Google</div>
     </div>
   </div>
@@ -104,7 +104,7 @@
     <div class="card">
       <div class="row">
         <div>
-          <div class="label">Form Input Pelanggaran</div>
+          <div class="label">Input Pelanggaran</div>
           <div class="muted">Pilih peserta</div>
         </div>
         <div class="row" style="gap:8px">
@@ -163,7 +163,7 @@
           <div class="row">
             <div>
               <div class="label">Sanksi (jika poin ≥ 50)</div>
-              <div class="muted small">Pilih salah satu, sesuai kebijakan sidang/pembina.</div>
+              <div class="muted small">Pilih, sesuai kebijakan.</div>
             </div>
           </div>
           <select id="selSanksi"></select>
@@ -213,7 +213,7 @@
           <tbody id="tblAll"></tbody>
         </table>
       </div>
-      <div class="muted small">Tip: gunakan “Sinkronisasi” untuk kirim ke Google Sheet.</div>
+      <div class="muted small">Tip: gunakan “Sinkronisasi” untuk kirim ke Server.</div>
     </div>
   </section>
 
@@ -241,11 +241,11 @@
 
       <div class="card">
         <div class="label">Sinkronisasi</div>
-        <div class="muted small">Mode offline: semua data tetap aman di perangkat. Sync bisa dilakukan kapan saja.</div>
+        <div class="muted small">Mode offline: semua data di perangkat. Sync dilakukan saat online.</div>
         <div class="grid form">
-          <button id="btnSyncUp" class="btn primary" type="button">Sync Up (Kirim Antrian)</button>
-          <button id="btnPullMaster" class="btn" type="button">Pull Master (Peserta + Pelanggaran)</button>
-          <button id="btnPullLogs" class="btn" type="button">Tarik Data Pelanggaran dari Google Sheet</button>
+          <button id="btnSyncUp" class="btn primary" type="button">Sync Up</button>
+          <button id="btnPullMaster" class="btn" type="button">Tarik Master Data</button>
+          <button id="btnPullLogs" class="btn" type="button">Tarik Data Aktual</button>
         </div>
         <div class="muted small" id="syncInfo"></div>
       </div>
@@ -256,7 +256,7 @@
       <ol class="muted">
         <li>Jalankan <b>Apps Script</b> (Code.gs) untuk membuat struktur Google Sheet dan publish sebagai Web App.</li>
         <li>Tempel URL Web App ke kolom di atas, lalu klik <b>Simpan Setting</b>.</li>
-        <li>Klik <b>Pull Master</b> untuk mengisi daftar peserta dan master pelanggaran.</li>
+        <li>Klik <b>Tarik Master Data</b> untuk mengisi daftar peserta dan master pelanggaran.</li>
         <li>Input pelanggaran di tab <b>Input</b> (offline bisa).</li>
         <li>Klik <b>Sync Up</b> saat internet tersedia.</li>
       </ol>
@@ -272,7 +272,7 @@
       <button id="btnCloseQr" class="btn ghost">Tutup</button>
     </div>
     <div id="qrReader" style="width: min(420px, 95vw)"></div>
-    <div class="muted small">Catatan: untuk keamanan, QR cukup berisi NIK angka saja.</div>
+    <div class="muted small">Catatan: untuk keamanan, QR cukup berisi NIK saja.</div>
   </div>
 </div>
 
