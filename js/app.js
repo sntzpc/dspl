@@ -68,6 +68,41 @@
   const AUTH_KEY = "tc.pelanggaran.auth";        // session
   const ADMIN_HASH_KEY = "tc.pelanggaran.adminHash"; // admin password hash stored
 
+  // ====== LOGIN RUN TOKEN (hindari tombol nyangkut / race logout) ======
+    let __loginRunId = 0;
+
+    // ====== LOGIN PROGRESS UI ======
+    function setLoginProgress(step, total, msg){
+      const hintEl = $("#loginHint");
+      const wrap = $("#loginProgWrap");
+      const bar  = $("#loginProgBar");
+
+      const s = Number(step || 0);
+      const t = Number(total || 0);
+
+      if(hintEl){
+        hintEl.textContent = t ? `${s}/${t} • ${msg || ""}` : String(msg || "");
+      }
+      if(wrap && bar && t){
+        wrap.style.display = "block";
+        const pct = Math.max(0, Math.min(100, Math.round((s / t) * 100)));
+        bar.style.width = pct + "%";
+      }else if(wrap){
+        // kalau tidak pakai step/total, sembunyikan bar
+        wrap.style.display = "none";
+      }
+    }
+
+    function resetLoginProgress(){
+      const hintEl = $("#loginHint");
+      const wrap = $("#loginProgWrap");
+      const bar  = $("#loginProgBar");
+      if(hintEl) hintEl.textContent = "";
+      if(wrap) wrap.style.display = "none";
+      if(bar) bar.style.width = "0%";
+    }
+
+
 
   // ====== HARD-CODE GAS CONFIG (tanam permanen) ======
   const HARD_GAS_URL = "https://script.google.com/macros/s/AKfycbwwk4W2skF6xkSoec3laTEGdHbe4Z7E6vJkfS6tGjwUI18Z960n8rbqUPuRE-axz9Ww/exec";
@@ -630,11 +665,14 @@
     toast("Data pelanggaran lokal dihapus.");
   }
 
-  function jsonp(url, timeoutMs=20000){
+  function jsonp(url, timeoutMs=25000){
     return new Promise((resolve, reject)=>{
       const cb = "__cb_" + Math.random().toString(16).slice(2);
       const u = new URL(url);
+
+      // wajib: callback + cache-buster (hindari cache/SW/redirect aneh di HP)
       u.searchParams.set("callback", cb);
+      u.searchParams.set("_ts", String(Date.now()));
 
       const s = document.createElement("script");
       let done = false;
@@ -659,6 +697,10 @@
         resolve(data);
       };
 
+      s.async = true;
+      s.defer = true;
+      s.referrerPolicy = "no-referrer";
+
       s.onerror = ()=>{
         if(done) return;
         done = true;
@@ -670,6 +712,7 @@
       document.head.appendChild(s);
     });
   }
+
 
   // POST tanpa preflight & tanpa baca response (hindari CORS)
   async function postNoCors(url, payload){
@@ -908,24 +951,26 @@
     }
 
     function bindTap(btn, fn){
-    if(!btn) return;
+      if(!btn) return;
 
-    const handler = (e)=>{
-      // cegah “tap dianggap scroll” & cegah event dobel
-      e.preventDefault?.();
-      e.stopPropagation?.();
-      fn();
-    };
+      // hindari double binding kalau wireSyncTab kepanggil lagi
+      if(btn.dataset._tapBound === "1") return;
+      btn.dataset._tapBound = "1";
 
-    // pointerup = paling stabil di HP (Android+iOS modern)
-    btn.addEventListener("pointerup", handler, { passive:false });
+      const handler = (e)=>{
+        e.preventDefault?.();
+        e.stopPropagation?.();
+        fn();
+      };
 
-    // fallback untuk browser lama
-    btn.addEventListener("touchend", handler, { passive:false });
+      if(window.PointerEvent){
+        btn.addEventListener("pointerup", handler, { passive:false });
+      }else{
+        // fallback browser lama
+        btn.addEventListener("click", handler);
+      }
+    }
 
-    // fallback umum desktop
-    btn.addEventListener("click", handler);
-  }
 
 
     // ===== tombol =====
@@ -1096,10 +1141,11 @@
     m.style.display = "flex";
     $("#loginUser").value = "";
     $("#loginPass").value = "";
-    $("#loginHint").textContent = "";
+    resetLoginProgress();
     resetLoginButton();
     setTimeout(()=> $("#loginUser")?.focus(), 50);
   }
+
 
   function closeLogin(){
     const m = $("#loginModal");
@@ -1108,6 +1154,8 @@
   }
 
   async function doLogin(){
+    const runId = ++__loginRunId;
+
     const u = String($("#loginUser").value||"").trim();
     const p = String($("#loginPass").value||"");
 
@@ -1126,6 +1174,10 @@
     };
     const unlockLogin = ()=>{
       if(!btnLogin) return;
+
+      // hanya boleh unlock kalau ini proses login terakhir (tidak dibatalkan logout)
+      if(runId !== __loginRunId) return;
+
       btnLogin.textContent = btnLogin.dataset._label || "Masuk";
       btnLogin.disabled = false;
       btnLogin.style.opacity = "1";
@@ -1135,6 +1187,7 @@
 
     try{
       if(!u){
+        resetLoginProgress();
         if(hintEl) hintEl.textContent = "Username wajib diisi.";
         return;
       }
@@ -1142,11 +1195,12 @@
       // ===== ADMIN LOGIN =====
       if(u.toLowerCase() === "admin"){
         lockLogin("⏳ Login admin...");
+        setLoginProgress(1, 1, "Verifikasi admin...");
         await ensureAdminHash();
         const stored = localStorage.getItem(ADMIN_HASH_KEY);
         const inputHash = await sha256(p);
         if(inputHash !== stored){
-          if(hintEl) hintEl.textContent = "Password admin salah.";
+          setLoginProgress(0, 0, "Password admin salah.");
           return;
         }
         saveAuth({ role:"admin", username:"admin", login_at:new Date().toISOString() });
@@ -1154,6 +1208,7 @@
         applyRoleUI();
         toast("Login admin ✅");
         await refreshDashboard(true);
+        wireSyncTab();
         return;
       }
 
@@ -1176,15 +1231,13 @@
         }
 
         lockLogin("⏳ Tarik Master...");
-        if(hintEl) hintEl.textContent = "NIK belum ada. Mengambil Master dari Google Sheet...";
-
-        // gunakan fungsi existing (boleh), karena saat ini belum login jadi tidak kena role-block
+        setLoginProgress(1, 3, "NIK belum ada. Mengambil Master dari Google Sheet...");
         await pullMaster({ force:true });
 
         // cek ulang
         part = await IDB.get("participants", nik);
         if(!part){
-          if(hintEl) hintEl.textContent = "NIK tidak ditemukan di Master. Hubungi admin untuk update data peserta.";
+          setLoginProgress(0, 0, "NIK tidak ditemukan di Master. Hubungi admin untuk update data peserta.");
           return;
         }
       }
@@ -1194,7 +1247,7 @@
       const localLogs = await IDB.getAll("violations");
       if((!localLogs || localLogs.length === 0) && navigator.onLine){
         lockLogin("⏳ Tarik Data...");
-        if(hintEl) hintEl.textContent = "Master siap. Mengambil data pelanggaran dari Google Sheet (sekali)...";
+        setLoginProgress(2, 3, "Master siap. Mengambil data pelanggaran (sekali)...");
         // Panggil langsung GAS agar tidak kena block role (karena belum saveAuth)
         const js = await gasFetch("getViolations", null, "GET");
         const rows = (js && js.rows) || [];
@@ -1205,12 +1258,14 @@
 
       // 4) login user
       lockLogin("⏳ Login user...");
+      setLoginProgress(3, 3, "Menyiapkan sesi user...");
       saveAuth({ role:"user", nik:String(nik), nama: part.nama || "", login_at:new Date().toISOString() });
 
       closeLogin();
       applyRoleUI();
       toast("Login user ✅");
       await refreshDashboard(true);
+      wireSyncTab();
 
     }catch(err){
       console.error(err);
@@ -1218,16 +1273,23 @@
       toast("Login gagal: " + (err.message || err));
     }finally{
       unlockLogin();
+      if(runId === __loginRunId){
+        // jangan hapus hint kalau berisi error
+        // tapi kalau sukses (modal tertutup), reset bar
+        if($("#loginModal")?.style?.display !== "flex"){
+          resetLoginProgress();
+        }
+      }
+
     }
   }
 
   async function logout(){
+    __loginRunId++; // batalkan proses login yang sedang berjalan
     clearAuth();
     applyRoleUI();
-    openLogin();
-    resetLoginButton();
+    openLogin(); // sudah reset button + progress di dalamnya
   }
-
 
   // ====== Toast ======
   function toast(msg){
