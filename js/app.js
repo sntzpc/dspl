@@ -754,7 +754,7 @@
       const sp1 = findSp1AssignmentForNik_(asgRows, x.nik);
 
       const sanksiTxt = sp1 ? (sp1.sanksi || WARNING_SANCTION_TEXT) : (WARNING_SANCTION_TEXT || "-");
-      const asgBadge  = sp1 ? badgeAssignment_(sp1.status) : `<span class="badge off">open</span>`;
+      const asgBadge  = sp1 ? badgeAssignment_(sp1.status) : `<span class="badge">-</span>`;
 
       // ✅ klik NIK/Nama langsung preview SP1 (window baru) + tombol print ada di dalamnya
       const nikLink  = `<button class="btn ghost btnSp1Preview" data-nik="${escapeAttr(x.nik)}" data-nama="${escapeAttr(x.nama)}" data-total="${escapeAttr(x.total)}" style="padding:6px 10px">🔎 ${escapeHtml(x.nik)}</button>`;
@@ -1894,6 +1894,26 @@
     return hit || null;
   }
 
+  async function setAssignmentStatusLocal_(assignmentId, status){
+    const id = String(assignmentId || "").trim();
+    if(!id) return;
+
+    const asg = await IDB.get("sanction_assignments", id);
+    if(!asg) return;
+
+    const cur = String(asg.status || "open").toLowerCase();
+    const next = String(status || "").toLowerCase();
+    if(!next) return;
+
+    // jangan turunkan status
+    if(cur === "done") return;
+
+    asg.status = next;
+    asg.updated_at = new Date().toISOString();
+
+    // biarkan synced tetap true (ini hanya untuk UI cepat)
+    await IDB.put("sanction_assignments", asg);
+  }
 
   // ====== SANCTIONS (Assignment + Report) ======
   let __currentAssignTarget = null;   // admin assign modal context
@@ -2369,6 +2389,7 @@
       // Simpan lokal queue dulu
       await IDB.put("sanction_reports", { ...payload, synced:false, synced_at:"" });
       toast("Laporan tersimpan di lokal ✅");
+      await setAssignmentStatusLocal_(__currentReportTarget.id, "reported");
 
       // kirim kalau online
       if(navigator.onLine){
@@ -2379,6 +2400,7 @@
 
           $("#reportInfo").textContent = "Mengonfirmasi (pull laporan)...";
           await pullAssignmentsIfOnline_();
+          await renderAssignmentsTable_();
 
           // Setelah pull, report dari server sudah masuk IDB (punya before_url/after_url)
           // Tandai synced untuk id ini (jika sudah ada)
@@ -2444,6 +2466,7 @@
 
     $("#syncInfo").textContent = "Mengonfirmasi (pull laporan dari server)...";
     await pullAssignmentsIfOnline_(); // ini menarik reports juga
+    await renderAssignmentsTable_();
 
     // Konfirmasi: jika report id sudah ada di server (ter-pull), tandai synced
     const afterPull = await IDB.getAll("sanction_reports");
