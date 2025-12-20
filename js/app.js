@@ -236,8 +236,8 @@
 
         // role gating: user hanya dash + data
         const tab = btn.dataset.tab;
-        if(a.role === "user" && !["dash","data"].includes(tab)){
-          toast("Akses dibatasi: hanya Dashboard & Data untuk user.");
+        if(a.role === "user" && !["dash","data","sync","sanctions"].includes(tab)){
+          toast("Akses dibatasi: hanya Dashboard, Data & Sinkronisasi untuk user.");
           return;
         }
 
@@ -250,6 +250,7 @@
         if(tab==="dash") refreshDashboard();
         if(tab==="data") renderAll();
         if(tab==="input") refreshRecent();
+        if(tab==="sanctions") renderSanctionsTab();
       });
     });
   }
@@ -748,6 +749,54 @@
     toast("Data pelanggaran lokal dihapus.");
   }
 
+  async function resetAppData(){
+  const ok = confirm(
+    "INI AKAN MENGHAPUS DATA LOKAL KHUSUS APLIKASI INI:\n" +
+    "- Database lokal (participants/master/violations/meta)\n" +
+    "- Session login\n" +
+    "- Cache PWA\n\n" +
+    "Lanjutkan?"
+  );
+  if(!ok) return;
+
+  try{
+    // 1) clear IndexedDB stores aplikasi ini
+    await IDB.clear("violations");
+    await IDB.clear("participants");
+    await IDB.clear("masterViolations");
+    await IDB.clear("meta");
+
+    // 2) hapus localStorage keys aplikasi ini
+    const keysToRemove = [
+      "tc.pelanggaran.cfg",
+      "tc.pelanggaran.user",
+      "tc.pelanggaran.installPrompt",
+      "tc.pelanggaran.auth",
+      "tc.pelanggaran.adminHash",
+    ];
+    keysToRemove.forEach(k=> localStorage.removeItem(k));
+
+    // 3) hapus Cache Storage (PWA cache)
+    if(window.caches && caches.keys){
+      const ck = await caches.keys();
+      await Promise.all(ck.map(name=> caches.delete(name)));
+    }
+
+    // 4) unregister service worker (jika ada)
+    if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations){
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r=> r.unregister()));
+    }
+
+    toast("Data lokal aplikasi sudah dihapus. Reload...");
+    setTimeout(()=> location.reload(), 600);
+  }catch(e){
+    console.error(e);
+    toast("Gagal reset aplikasi: " + (e.message || e));
+  }
+}
+
+
   function jsonp(url, timeoutMs=25000){
     return new Promise((resolve, reject)=>{
       const cb = "__cb_" + Math.random().toString(16).slice(2);
@@ -812,6 +861,66 @@
     return { ok:true }; // response opaque (tidak bisa dibaca)
   }
 
+  function postViaIframe(url, payload, timeoutMs=25000){
+  return new Promise((resolve, reject)=>{
+    const cb = "__postcb_" + Math.random().toString(16).slice(2);
+    const u = new URL(url);
+    u.searchParams.set("callback", cb);
+    u.searchParams.set("_ts", String(Date.now()));
+
+    let done = false;
+    const timer = setTimeout(()=>{
+      if(done) return;
+      done = true;
+      cleanup();
+      reject(new Error("POST iframe timeout"));
+    }, timeoutMs);
+
+    function cleanup(){
+      clearTimeout(timer);
+      try{ delete window[cb]; }catch(_){}
+      if(ifr && ifr.parentNode) ifr.parentNode.removeChild(ifr);
+      if(frm && frm.parentNode) frm.parentNode.removeChild(frm);
+    }
+
+    window[cb] = (data)=>{
+      if(done) return;
+      done = true;
+      cleanup();
+      resolve(data);
+    };
+
+    const ifr = document.createElement("iframe");
+    ifr.name = cb;
+    ifr.style.display = "none";
+    document.body.appendChild(ifr);
+
+    const frm = document.createElement("form");
+    frm.method = "POST";
+    frm.action = u.toString();
+    frm.target = cb;
+    frm.style.display = "none";
+
+    // kirim payload sebagai text/plain (seperti pola yang Bapak suka)
+    const ta = document.createElement("textarea");
+    ta.name = "payload"; // optional, tapi kita pakai body langsung via postData.contents? -> tidak
+    // ⚠️ Apps Script WebApp membaca e.postData.contents dari body raw.
+    // Form post default content-type: application/x-www-form-urlencoded
+    // Jadi kita trik: kirim raw JSON lewat 1 field dan di GAS baca dari parameter kalau perlu.
+
+    // Cara paling aman & sederhana: gunakan body JSON raw via fetch? tapi CORS.
+    // Jadi kita lakukan: kirim field "contents" lalu GAS baca dari e.parameter.contents.
+    ta.name = "contents";
+    ta.value = JSON.stringify(payload || {});
+    frm.appendChild(ta);
+
+    document.body.appendChild(frm);
+
+    // submit
+    frm.submit();
+  });
+}
+
   async function warmUpGas(action="ping"){
       const cfg = loadCfg();
       const url = new URL(cfg.gasUrl);
@@ -840,14 +949,26 @@
     }
 
 
-
   // ====== GAS API ======
   async function gasFetch(action, payload=null, method=null){
     const cfg = loadCfg();
     if(!cfg.gasUrl) throw new Error("GAS URL belum diisi.");
 
     const url = new URL(cfg.gasUrl);
-    url.searchParams.set("action", action);
+
+    // support action seperti: "getViolations&nik=123"
+    const [act, qs] = String(action).split("&", 2);
+    url.searchParams.set("action", act);
+
+    if(qs){
+      // masukkan sisa query yang sudah ada
+      const rest = String(action).slice(String(act).length + 1); // setelah &
+      rest.split("&").forEach(pair=>{
+        const [k,v] = pair.split("=");
+        if(k) url.searchParams.set(k, decodeURIComponent(v || ""));
+      });
+    }
+
     if(cfg.apiKey) url.searchParams.set("key", cfg.apiKey);
 
     // GET -> JSONP (bebas CORS) + retry untuk Chrome Android
@@ -866,8 +987,9 @@
 
     // POST -> no-cors (hindari preflight & CORS)
     if(payload && (!method || method === "POST")){
-      await postNoCors(url.toString(), payload);
-      return { ok:true };
+      const js = await postViaIframe(url.toString(), payload, 30000);
+      if(!js || js.ok === false) throw new Error((js && js.message) || "Gagal POST (iframe).");
+      return js;
     }
 
     // fallback
@@ -905,17 +1027,12 @@
     $("#syncInfo").textContent = `Mengirim ${queue.length} data...`;
 
     // 1) Kirim (no-cors, tanpa baca response)
-    await gasFetch("upsertViolations", { rows: queue }, "POST");
-
-    // 2) Verifikasi dengan menarik log (JSONP GET) lalu cocokkan id
-    $("#syncInfo").textContent = `Verifikasi ke Google Sheet...`;
-    const js = await gasFetch("getViolations", null, "GET");
-    const rows = (js && js.rows) || [];
-    const idsOnSheet = new Set(rows.map(r => String(r.id || "").trim()).filter(Boolean));
+    const res = await gasFetch("upsertViolations", { rows: queue }, "POST");
+    const idsOk = new Set((res.ids || []).map(x=>String(x).trim()).filter(Boolean));
 
     let updated = 0;
     for(const r of queue){
-      if(r && idsOnSheet.has(String(r.id))){
+      if(r && idsOk.has(String(r.id))){
         r.synced = true;
         r.synced_at = new Date().toISOString();
         await IDB.put("violations", r);
@@ -923,7 +1040,7 @@
       }
     }
 
-    $("#syncInfo").textContent = `Selesai: ${updated}/${queue.length} baris terkonfirmasi masuk Google Sheet.`;
+    $("#syncInfo").textContent = `Selesai: ${updated}/${queue.length} baris terkonfirmasi masuk ke Server.`;
 
     await refreshRecent();
     await renderAll();
@@ -1007,34 +1124,37 @@
   }
 
 
-  async function pullLogs(){
-    const a = loadAuth();
-    if(a && a.role === "user") throw new Error("Mode user: tidak diizinkan pull.");
-    $("#syncInfo").textContent = "Mengambil data pelanggaran dari Google Sheet...";
-    const js = await gasFetch("getViolations");
-    const rows = js.rows || [];
-    // upsert to local, mark synced
-    for(const r of rows){
-      await IDB.put("violations", {...r, synced:true, synced_at: r.synced_at || r.updated_at || ""});
-    }
-    $("#syncInfo").textContent = `Tarik log selesai: ${rows.length} baris.`;
-    await refreshRecent();
-    await renderAll();
-    await refreshDashboard(true);
-    await renderQueueKpi();
-    toast("Tarik data selesai ✅");
+  async function pullLogs(opts = {}){
+  const a = loadAuth();
+  const isUser = a && a.role === "user";
+  const myNik = isUser ? String(a.nik || "").trim() : "";
+
+  $("#syncInfo").textContent = "Mengambil data pelanggaran dari Google Sheet...";
+  const action = (isUser && myNik) ? ("getViolations&nik=" + encodeURIComponent(myNik)) : "getViolations";
+  const js = await gasFetch(action, null, "GET");
+  let rows = (js && js.rows) || [];
+
+  // ✅ IMPORTANT: jika user, simpan hanya data miliknya
+  if(isUser){
+    rows = rows.filter(r => String(r?.nik || "").trim() === myNik);
   }
+
+  for(const r of rows){
+    await IDB.put("violations", { ...r, synced:true, synced_at: r.synced_at || r.updated_at || "" });
+  }
+
+  $("#syncInfo").textContent = `Tarik data selesai: ${rows.length} baris.`;
+  await refreshRecent();
+  await renderAll();
+  await refreshDashboard(true);
+  await renderQueueKpi();
+  toast("Tarik data selesai ✅");
+}
 
   function wireSyncTab(){
     const cfg = loadCfg();
     const a = loadAuth();
     const isUser = a && a.role === "user";
-    const btnTestPing = $("#btnTestPing");
-    if(btnTestPing){
-      btnTestPing.addEventListener("click", ()=>{
-        testPing();
-      });
-    }
 
     // ===== 1) Selalu tampilkan config (read-only) =====
     const gasEl = $("#inpGasUrl");
@@ -1133,23 +1253,47 @@
     const btnSyncUp = $("#btnSyncUp");
     const btnPullMaster = $("#btnPullMaster");
     const btnPullLogs = $("#btnPullLogs");
+    const btnResetApp = $("#btnResetApp");
 
     // ===== 2) Role gating: USER =====
     if(isUser){
-      [btnSyncUp, btnPullMaster, btnPullLogs].forEach(btn=>{
-        if(btn){
-          btn.disabled = true;
-          btn.style.opacity = "0.6";
-        }
-      });
-      if(btnSyncUp) btnSyncUp.title = "Mode user: tidak diizinkan Sync";
-      if(btnPullMaster) btnPullMaster.title = "Mode user: tidak diizinkan Pull Master";
-      if(btnPullLogs) btnPullLogs.title = "Mode user: tidak diizinkan Pull Logs";
+      // user: hanya boleh Tarik Data Aktual + Reset Aplikasi
+      if(btnSyncUp){
+        btnSyncUp.disabled = true;
+        btnSyncUp.style.opacity = "0.6";
+        btnSyncUp.title = "Mode user: tidak diizinkan Sync Up";
+      }
+      if(btnPullMaster){
+        btnPullMaster.disabled = true;
+        btnPullMaster.style.opacity = "0.6";
+        btnPullMaster.title = "Mode user: tidak diizinkan Tarik Master";
+      }
+
+      // ✅ boleh tarik data aktual
+      if(btnPullLogs){
+        btnPullLogs.disabled = false;
+        btnPullLogs.style.opacity = "1";
+        btnPullLogs.title = "Tarik data pelanggaran (hanya data NIK Anda)";
+        bindTap(btnPullLogs, ()=>{
+          safeRun(btnPullLogs, async ()=>{ await pullLogs(); }, "⏳ Pull Data...");
+        });
+      }
+
+      // ✅ boleh reset aplikasi
+      if(btnResetApp){
+        btnResetApp.disabled = false;
+        btnResetApp.style.opacity = "1";
+        btnResetApp.title = "Hapus semua data lokal aplikasi ini";
+        bindTap(btnResetApp, ()=>{
+          safeRun(btnResetApp, async ()=>{ await resetAppData(); }, "⏳ Menghapus...");
+        });
+      }
 
       const info = $("#syncInfo");
-      if(info) info.textContent = "Mode user: sinkronisasi hanya dapat dilakukan oleh admin.";
+      if(info) info.textContent = "Mode user: Anda bisa Tarik Data Aktual & Hapus Data Lokal aplikasi.";
       return;
     }
+
 
     // ===== 3) ADMIN: pasang handler dengan anti double-click =====
     if(btnSyncUp){
@@ -1169,7 +1313,12 @@
         safeRun(btnPullLogs, async ()=>{ await pullLogs(); }, "⏳ Pull Logs...");
       });
     }
-    setTimeout(()=> testPing(), 1200);
+
+    if(btnResetApp){
+      bindTap(btnResetApp, ()=>{
+        safeRun(btnResetApp, async ()=>{ await resetAppData(); }, "⏳ Menghapus...");
+      });
+    }
   }
 
 
@@ -1254,8 +1403,9 @@
         t.style.display = "inline-flex";
         return;
       }
-      // user: hanya dash + data
-      t.style.display = (["dash","data"].includes(tab)) ? "inline-flex" : "none";
+
+      // user: dash + data + sync
+      t.style.display = (["dash","data","sync","sanctions"].includes(tab)) ? "inline-flex" : "none";
     });
 
     // if user, paksa aktifkan dashboard tab
@@ -1406,7 +1556,11 @@
         setLoginProgress(2, 3, "Master siap. Mengambil data pelanggaran (sekali)...");
         // Panggil langsung GAS agar tidak kena block role (karena belum saveAuth)
         const js = await gasFetch("getViolations", null, "GET");
-        const rows = (js && js.rows) || [];
+        let rows = (js && js.rows) || [];
+
+        // ✅ user hanya simpan data dirinya
+        rows = rows.filter(r => String(r?.nik || "").trim() === String(nik).trim());
+
         for(const r of rows){
           await IDB.put("violations", { ...r, synced:true, synced_at: r.synced_at || r.updated_at || "" });
         }
@@ -1475,6 +1629,469 @@
     setTimeout(()=> el.style.display="none", 250);
   }, 2200);
   }
+
+  // ====== SANCTIONS (Assignment + Report) ======
+  let __currentAssignTarget = null;   // admin assign modal context
+  let __currentReportTarget = null;   // user report modal context
+
+  async function renderSanctionsTab(){
+    const a = loadAuth();
+    const isUser = a && a.role === "user";
+    const isAdm  = a && a.role === "admin";
+
+    // subtitle
+    const sub = $("#sanctionsSub");
+    if(sub){
+      sub.textContent = isUser ? `Mode user (${a.nik}) • Menampilkan sanksi Anda` : "Mode admin • Menampilkan semua sanksi & laporan";
+    }
+
+    // show admin box
+    const admBox = $("#adminSanctionsBox");
+    if(admBox) admBox.style.display = isAdm ? "block" : "none";
+
+    // render assignment list from local
+    await pullAssignmentsIfOnline_();
+    await renderAssignmentsTable_();
+
+    // admin risk list based on dash range
+    if(isAdm){
+      await renderAdminRiskAssign_();
+    }
+  }
+
+  async function pullAssignmentsIfOnline_(){
+    // Tarik assignments dari server kalau online (admin: semua, user: nik sendiri)
+    if(!navigator.onLine) return;
+
+    const a = loadAuth();
+    if(!a) return;
+
+    try{
+      const action = (a.role === "user")
+        ? ("getAssignments&nik=" + encodeURIComponent(String(a.nik||"").trim()))
+        : "getAssignments";
+
+      const js = await gasFetch(action, null, "GET");
+      const rows = (js && js.rows) || [];
+      for(const r of rows){
+        await IDB.put("sanction_assignments", normalizeAssignment_(r));
+      }
+
+      // laporan (opsional tampilkan untuk admin)
+      const actionR = (a.role === "user")
+        ? ("getReports&nik=" + encodeURIComponent(String(a.nik||"").trim()))
+        : "getReports";
+
+      const jsR = await gasFetch(actionR, null, "GET");
+      const rep = (jsR && jsR.rows) || [];
+      for(const rr of rep){
+        await IDB.put("sanction_reports", { ...rr, synced:true, synced_at: rr.updated_at || "" });
+      }
+    }catch(e){
+      console.warn("pullAssignmentsIfOnline failed:", e);
+    }
+  }
+
+  function normalizeAssignment_(r){
+    return {
+      id: String(r.id || "").trim() || uuid(),
+      nik: String(r.nik || "").trim(),
+      nama: String(r.nama || "").trim(),
+      sanksi: String(r.sanksi || "").trim(),          // "a | b | c"
+      note_admin: String(r.note_admin || "").trim(),
+      status: String(r.status || "open").trim(),      // open / reported / done
+      created_at: r.created_at || new Date().toISOString(),
+      updated_at: r.updated_at || ""
+    };
+  }
+
+  async function renderAssignmentsTable_(){
+    const a = loadAuth();
+    if(!a) return;
+
+    const isUser = a.role === "user";
+    const nikMe = isUser ? String(a.nik||"").trim() : "";
+
+    let rows = await IDB.getAll("sanction_assignments");
+    rows = (rows || []).filter(x=> x && x.nik);
+
+    if(isUser){
+      rows = rows.filter(x=> String(x.nik) === nikMe);
+    }
+
+    rows.sort((x,y)=> new Date(y.created_at) - new Date(x.created_at));
+
+    $("#tblSanctions").innerHTML = rows.map(x=>{
+      const st = (x.status || "open").toLowerCase();
+      const badge = st === "done"
+        ? `<span class="badge ok">done</span>`
+        : (st === "reported" ? `<span class="badge">reported</span>` : `<span class="badge off">open</span>`);
+
+      let aksi = "-";
+      if(isUser){
+        aksi = `<button class="btn ghost btnReport" data-id="${escapeAttr(x.id)}">Laporkan</button>`;
+      }else{
+        aksi = `<button class="btn ghost btnViewReport" data-id="${escapeAttr(x.id)}">Lihat Laporan</button>`;
+      }
+
+      return `<tr>
+        <td>${fmtDate(new Date(x.created_at))}</td>
+        <td>${escapeHtml(x.nik)}</td>
+        <td>${escapeHtml(x.nama)}</td>
+        <td>${escapeHtml(x.sanksi || "-")}${x.note_admin ? `<div class="muted small">${escapeHtml(x.note_admin)}</div>` : ""}</td>
+        <td>${badge}</td>
+        <td>${aksi}</td>
+      </tr>`;
+    }).join("");
+
+    // bind action buttons (delegation)
+    bindSanctionsActions_();
+  }
+
+  function bindSanctionsActions_(){
+    const root = $("#tblSanctions");
+    if(!root || root.dataset._wired === "1") return;
+    root.dataset._wired = "1";
+
+    root.addEventListener("click", async (e)=>{
+      const btn = e.target.closest("button");
+      if(!btn) return;
+
+      const id = btn.getAttribute("data-id");
+      if(!id) return;
+
+      if(btn.classList.contains("btnReport")){
+        await openReportModal_(id);
+      }
+      if(btn.classList.contains("btnViewReport")){
+        await openViewReport_(id);
+      }
+    }, { passive:false });
+  }
+
+  async function renderAdminRiskAssign_(){
+    // daftar peserta >=50 pada range dashboard (mengikuti dropdown dashboard)
+    const all = await getVisibleViolations();
+    const { from, to } = getDashRange();
+    const fromTs = from.getTime();
+    const toTs = to.getTime();
+
+    const rowsRange = (all||[]).filter(r=>{
+      const ts = new Date(r.waktu).getTime();
+      return ts >= fromTs && ts < toTs;
+    });
+
+    const map = new Map();
+    for(const r of rowsRange){
+      const nik = String(r.nik||"").trim();
+      if(!nik) continue;
+      map.set(nik, (map.get(nik)||0) + Number(r.poin||0));
+    }
+
+    const list = Array.from(map.entries())
+      .filter(([_, total])=> total >= 50)
+      .sort((a,b)=> b[1]-a[1])
+      .slice(0, 50);
+
+    $("#tblAdminRiskAssign").innerHTML = list.map(([nik,total])=>{
+      const thr = pickThreshold(total);
+      const p = rowsRange.find(x=> String(x.nik)===String(nik)) || {};
+      return `<tr>
+        <td>${escapeHtml(nik)}</td>
+        <td>${escapeHtml(p.nama||"")}</td>
+        <td><b>${total}</b></td>
+        <td>${escapeHtml(thr.status||"")}</td>
+        <td><button class="btn btnAssign" data-nik="${escapeAttr(nik)}" data-nama="${escapeAttr(p.nama||"")}" data-total="${total}">Beri Sanksi</button></td>
+      </tr>`;
+    }).join("");
+
+    // bind once
+    const tbl = $("#tblAdminRiskAssign");
+    if(tbl && tbl.dataset._wired !== "1"){
+      tbl.dataset._wired = "1";
+      tbl.addEventListener("click", async (e)=>{
+        const b = e.target.closest("button.btnAssign");
+        if(!b) return;
+        const nik = b.getAttribute("data-nik");
+        const nama = b.getAttribute("data-nama");
+        const total = Number(b.getAttribute("data-total")||0);
+        await openAssignModal_(nik, nama, total);
+      }, { passive:false });
+    }
+  }
+
+  async function openAssignModal_(nik, nama, totalPoin){
+    if(!isAdmin()){
+      toast("Hanya admin.");
+      return;
+    }
+    __currentAssignTarget = { nik:String(nik||"").trim(), nama:String(nama||"").trim(), totalPoin:Number(totalPoin||0) };
+
+    // isi select sanctions dari master sanctions
+    const sanctions = await getSanctions();
+    $("#assignSanksi").innerHTML = sanctions.map(s=>`<option value="${escapeAttr(s)}">${escapeHtml(s)}</option>`).join("");
+
+    $("#assignNik").value = __currentAssignTarget.nik;
+    $("#assignNama").value = __currentAssignTarget.nama;
+    $("#assignSub").textContent = `Akumulasi poin periode dashboard: ${__currentAssignTarget.totalPoin}`;
+    $("#assignNote").value = "";
+    $("#assignInfo").textContent = "";
+    Array.from($("#assignSanksi").options||[]).forEach(o=> o.selected=false);
+
+    $("#assignModal").style.display = "flex";
+  }
+
+  function closeAssignModal_(){
+    const m = $("#assignModal");
+    if(m) m.style.display = "none";
+    __currentAssignTarget = null;
+  }
+
+  function getMultiSelected_(selId){
+    const sel = $(selId);
+    const vals = Array.from(sel?.selectedOptions||[]).map(o=> String(o.value||"").trim()).filter(Boolean);
+    return vals;
+  }
+
+  async function saveAssign_(){
+    if(!isAdmin()) return;
+    if(!__currentAssignTarget) return;
+
+    const picks = getMultiSelected_("#assignSanksi");
+    if(!picks.length){
+      toast("Pilih minimal 1 sanksi.");
+      return;
+    }
+
+    const note_admin = String($("#assignNote").value||"").trim();
+
+    const rec = {
+      id: uuid(),
+      nik: __currentAssignTarget.nik,
+      nama: __currentAssignTarget.nama,
+      sanksi: picks.join(" | "),
+      note_admin,
+      status: "open",
+      created_at: new Date().toISOString(),
+      updated_at: "",
+      synced: false,
+      synced_at: ""
+    };
+
+    await IDB.put("sanction_assignments", rec);
+    toast("Sanksi disimpan di lokal ✅");
+
+    closeAssignModal_();
+    await renderAssignmentsTable_();
+    await renderQueueKpi(); // optional: tetap pakai KPI queue violations, tapi tidak masalah
+
+    // kalau online, langsung kirim
+    if(navigator.onLine){
+      try{
+        await syncUpAll_();
+      }catch(_){}
+    }
+  }
+
+  async function openReportModal_(assignmentId){
+    const a = loadAuth();
+    if(!a || a.role !== "user"){
+      toast("Hanya user yang bisa lapor.");
+      return;
+    }
+
+    const asg = await IDB.get("sanction_assignments", assignmentId);
+    if(!asg){
+      toast("Data sanksi tidak ditemukan.");
+      return;
+    }
+
+    __currentReportTarget = asg;
+
+    $("#reportSub").textContent = `${asg.nik} • ${asg.nama} • ${asg.sanksi}`;
+    $("#reportNote").value = "";
+    $("#reportBefore").value = "";
+    $("#reportAfter").value = "";
+    $("#beforeHint").textContent = "Belum dipilih";
+    $("#afterHint").textContent = "Belum dipilih";
+    $("#reportInfo").textContent = "";
+
+    $("#reportModal").style.display = "flex";
+  }
+
+  function closeReportModal_(){
+    const m = $("#reportModal");
+    if(m) m.style.display = "none";
+    __currentReportTarget = null;
+  }
+
+  async function openViewReport_(assignmentId){
+    // Admin melihat laporan: cari report di store
+    if(!isAdmin()){
+      toast("Hanya admin.");
+      return;
+    }
+    const reps = await IDB.queryIndex("sanction_reports", "assignment_id", { eq: assignmentId });
+    const r = (reps||[]).sort((a,b)=> new Date(b.created_at)-new Date(a.created_at))[0];
+    if(!r){
+      toast("Belum ada laporan untuk sanksi ini.");
+      return;
+    }
+
+    // tampilkan sederhana via alert (minimal perubahan UI)
+    const msg =
+      `LAPORAN:\n`+
+      `NIK: ${r.nik}\n`+
+      `Nama: ${r.nama}\n`+
+      `Catatan: ${r.note_user || "-"}\n\n`+
+      `Before: ${r.before_url}\n`+
+      `After: ${r.after_url}\n`;
+
+    alert(msg);
+  }
+
+  async function compressImageToDataUrl(file, maxW=1280, quality=0.75){
+    // return dataURL jpeg
+    const img = await new Promise((resolve, reject)=>{
+      const i = new Image();
+      i.onload = ()=> resolve(i);
+      i.onerror = reject;
+      i.src = URL.createObjectURL(file);
+    });
+
+    const ratio = Math.min(1, maxW / img.width);
+    const w = Math.round(img.width * ratio);
+    const h = Math.round(img.height * ratio);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, w, h);
+
+    const dataUrl = canvas.toDataURL("image/jpeg", quality);
+    try{ URL.revokeObjectURL(img.src); }catch(_){}
+    return dataUrl;
+  }
+
+  async function submitReport_(){
+    const a = loadAuth();
+    if(!a || a.role !== "user"){
+      toast("Hanya user.");
+      return;
+    }
+    if(!__currentReportTarget){
+      toast("Context report hilang.");
+      return;
+    }
+
+    const f1 = $("#reportBefore").files?.[0];
+    const f2 = $("#reportAfter").files?.[0];
+    if(!f1 || !f2){
+      toast("Foto sebelum & sesudah wajib.");
+      return;
+    }
+
+    $("#reportInfo").textContent = "Memproses foto...";
+    const before_b64 = await compressImageToDataUrl(f1, 1280, 0.75);
+    const after_b64  = await compressImageToDataUrl(f2, 1280, 0.75);
+
+    const payload = {
+      id: uuid(),
+      assignment_id: __currentReportTarget.id,
+      nik: __currentReportTarget.nik,
+      nama: __currentReportTarget.nama,
+      note_user: String($("#reportNote").value||"").trim(),
+      before_b64,
+      after_b64,
+      created_at: new Date().toISOString()
+    };
+
+    // Simpan lokal queue dulu
+    await IDB.put("sanction_reports", { ...payload, synced:false, synced_at:"" });
+    toast("Laporan tersimpan di lokal ✅");
+
+    // kirim kalau online
+    if(navigator.onLine){
+      try{
+        $("#reportInfo").textContent = "Mengirim laporan ke server...";
+        const js = await gasFetch("submitSanctionReport", payload, "POST");
+        // tandai synced + simpan url balikannya kalau ada
+        const rec = await IDB.get("sanction_reports", payload.id);
+        if(rec){
+          rec.synced = true;
+          rec.synced_at = new Date().toISOString();
+          if(js.before_url) rec.before_url = js.before_url;
+          if(js.after_url)  rec.after_url  = js.after_url;
+          await IDB.put("sanction_reports", rec);
+        }
+
+        // update status assignment jadi reported
+        const asg = await IDB.get("sanction_assignments", __currentReportTarget.id);
+        if(asg){
+          asg.status = "reported";
+          asg.updated_at = new Date().toISOString();
+          await IDB.put("sanction_assignments", asg);
+        }
+
+        $("#reportInfo").textContent = "Laporan terkirim ✅";
+        toast("Laporan terkirim ✅");
+      }catch(e){
+        $("#reportInfo").textContent = "Gagal kirim (tetap tersimpan lokal): " + e.message;
+        toast("Gagal kirim: " + e.message);
+      }
+    }else{
+      $("#reportInfo").textContent = "Offline: laporan akan terkirim saat online & sync.";
+    }
+
+    closeReportModal_();
+    await renderAssignmentsTable_();
+  }
+
+  async function syncUpAll_(){
+    // kirim queue violations + assignments (admin) + reports (user/admin)
+    // (pakai endpoint yang sudah ada + endpoint baru)
+    const a = loadAuth();
+    if(!a) return;
+
+    // 1) violations: pakai syncUp existing (admin saja)
+    if(a.role === "admin"){
+      await syncUp();
+    }
+
+    // 2) assignments: admin saja
+    if(a.role === "admin"){
+      const allA = await IDB.getAll("sanction_assignments");
+      const queueA = (allA||[]).filter(r => r && r.synced !== true);
+      if(queueA.length){
+        const resA = await gasFetch("upsertAssignments", { rows: queueA }, "POST");
+        const okIds = new Set((resA.ids||[]).map(x=>String(x).trim()).filter(Boolean));
+        for(const r of queueA){
+          if(okIds.has(String(r.id))){
+            r.synced = true;
+            r.synced_at = new Date().toISOString();
+            await IDB.put("sanction_assignments", r);
+          }
+        }
+      }
+    }
+
+    // 3) reports: bisa user/admin (tapi user submit langsung biasanya)
+    //   Jika ada laporan yang belum synced, coba submit satu-satu (karena endpoint upload foto)
+    const allR = await IDB.getAll("sanction_reports");
+    const queueR = (allR||[]).filter(r => r && r.synced !== true);
+    for(const r of queueR){
+      // kirim ulang
+      const js = await gasFetch("submitSanctionReport", r, "POST");
+      r.synced = true;
+      r.synced_at = new Date().toISOString();
+      if(js.before_url) r.before_url = js.before_url;
+      if(js.after_url)  r.after_url  = js.after_url;
+      await IDB.put("sanction_reports", r);
+    }
+  }
+
 
 
   // ====== boot ======
@@ -1568,6 +2185,23 @@
 
       toggleCustom();
     }
+
+    // ===== Sanctions tab wiring =====
+    clickOnce("#btnSanctionsRefresh", ()=> renderSanctionsTab().catch(e=> toast("Gagal: " + e.message)));
+
+    clickOnce("#btnCloseAssign", ()=> closeAssignModal_());
+    bindOnce($("#assignModal"), "click", (e)=>{ if(e.target?.id==="assignModal") closeAssignModal_(); });
+
+    clickOnce("#btnSaveAssign", ()=> saveAssign_().catch(e=> toast("Gagal: " + e.message)));
+
+    clickOnce("#btnCloseReport", ()=> closeReportModal_());
+    bindOnce($("#reportModal"), "click", (e)=>{ if(e.target?.id==="reportModal") closeReportModal_(); });
+
+    bindOnce($("#reportBefore"), "change", ()=> { $("#beforeHint").textContent = $("#reportBefore").files?.[0]?.name || "Belum dipilih"; });
+    bindOnce($("#reportAfter"),  "change", ()=> { $("#afterHint").textContent  = $("#reportAfter").files?.[0]?.name  || "Belum dipilih"; });
+
+    clickOnce("#btnSubmitReport", ()=> submitReport_().catch(e=> toast("Gagal: " + e.message)));
+
 
     // ===== Install PWA =====
     wireInstall();

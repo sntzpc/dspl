@@ -33,9 +33,9 @@
 <nav class="tabs">
   <button class="tab active" data-tab="dash">Dashboard</button>
   <button class="tab" data-tab="input">Input</button>
+  <button class="tab" data-tab="sanctions">Sanksi</button>
   <button class="tab" data-tab="data">Data</button>
   <button class="tab" data-tab="sync">Sinkronisasi</button>
-  <button id="btnTestPing" class="btn ghost">Ping</button>
       <a class="btn ghost"
       href="https://docs.google.com/document/d/1-4TsLvP4d0-TfL0oowRyygx9irrXrm2_/edit?usp=sharing&ouid=118008561524527827091&rtpof=true&sd=true"
       target="_blank"
@@ -204,6 +204,131 @@
     </div>
   </section>
 
+  <!-- SANKSI -->
+  <section id="tab-sanctions" class="panel" style="display:none">
+    <div class="card">
+      <div class="row">
+        <div>
+          <div class="label">Sanksi Peserta</div>
+          <div class="muted small" id="sanctionsSub">—</div>
+        </div>
+        <div class="row" style="gap:8px">
+          <!-- admin-only -->
+          <button id="btnSanctionsRefresh" class="btn ghost">Reload</button>
+        </div>
+      </div>
+
+      <!-- ADMIN: daftar peserta risk + tombol beri sanksi -->
+      <div id="adminSanctionsBox" class="card subtle" style="display:none; margin-top:10px">
+        <div class="label">Admin • Beri Sanksi ke Peserta (≥ 50 poin pada periode dashboard)</div>
+        <div class="muted small">Gunakan periode Dashboard (today/7/30/custom) sebagai acuan akumulasi poin.</div>
+        <div class="tableWrap" style="margin-top:10px">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>NIK</th><th>Nama</th><th>Total Poin</th><th>Status</th><th>Aksi</th>
+              </tr>
+            </thead>
+            <tbody id="tblAdminRiskAssign"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Semua role: daftar sanksi yang diterima -->
+      <div class="tableWrap" style="margin-top:10px">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Waktu</th><th>NIK</th><th>Nama</th><th>Sanksi</th><th>Status</th><th>Aksi</th>
+            </tr>
+          </thead>
+          <tbody id="tblSanctions"></tbody>
+        </table>
+      </div>
+
+      <div class="muted small" style="margin-top:8px">
+        *User: Anda bisa membuat laporan pengerjaan sanksi dengan 2 foto (sebelum & sesudah). Admin akan memverifikasi.
+      </div>
+    </div>
+  </section>
+
+  <!-- MODAL: ASSIGN SANKSI (ADMIN) -->
+  <div id="assignModal" class="modal" style="display:none">
+    <div class="modalCard" style="max-width:720px">
+      <div class="row">
+        <div>
+          <div class="label">Beri Sanksi</div>
+          <div class="muted small" id="assignSub">—</div>
+        </div>
+        <button id="btnCloseAssign" class="btn ghost">Tutup</button>
+      </div>
+
+      <div class="grid form" style="margin-top:10px">
+        <div>
+          <label>NIK</label>
+          <input id="assignNik" readonly />
+        </div>
+        <div>
+          <label>Nama</label>
+          <input id="assignNama" readonly />
+        </div>
+
+        <div style="grid-column:1 / -1">
+          <label>Pilih Sanksi (boleh lebih dari 1)</label>
+          <select id="assignSanksi" multiple></select>
+          <div class="muted small">Tip: tekan Ctrl (PC) / tap beberapa kali (HP) untuk pilih banyak.</div>
+        </div>
+
+        <div style="grid-column:1 / -1">
+          <label>Catatan Admin (opsional)</label>
+          <input id="assignNote" placeholder="Catatan / instruksi tambahan..." />
+        </div>
+      </div>
+
+      <div class="row end" style="margin-top:12px">
+        <button id="btnSaveAssign" class="btn primary">Simpan Sanksi</button>
+      </div>
+      <div class="muted small" id="assignInfo" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+  <!-- MODAL: REPORT SANKSI (USER) -->
+  <div id="reportModal" class="modal" style="display:none">
+    <div class="modalCard" style="max-width:760px">
+      <div class="row">
+        <div>
+          <div class="label">Laporan Pengerjaan Sanksi</div>
+          <div class="muted small" id="reportSub">—</div>
+        </div>
+        <button id="btnCloseReport" class="btn ghost">Tutup</button>
+      </div>
+
+      <div class="grid form" style="margin-top:10px">
+        <div style="grid-column:1 / -1">
+          <label>Catatan Pelapor (opsional)</label>
+          <input id="reportNote" placeholder="Tulis singkat apa yang dikerjakan..." />
+        </div>
+
+        <div>
+          <label>Foto Sebelum (wajib)</label>
+          <input id="reportBefore" type="file" accept="image/*" capture="environment" />
+          <div class="muted small" id="beforeHint">—</div>
+        </div>
+        <div>
+          <label>Foto Sesudah (wajib)</label>
+          <input id="reportAfter" type="file" accept="image/*" capture="environment" />
+          <div class="muted small" id="afterHint">—</div>
+        </div>
+      </div>
+
+      <div class="row end" style="margin-top:12px">
+        <button id="btnSubmitReport" class="btn primary">Kirim Laporan</button>
+      </div>
+      <div class="muted small" id="reportInfo" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+
   <!-- DATA -->
   <section id="tab-data" class="panel" style="display:none">
     <div class="card">
@@ -253,11 +378,14 @@
       <div class="card">
         <div class="label">Sinkronisasi</div>
         <div class="muted small">Mode offline: semua data di perangkat. Sync dilakukan saat online.</div>
+
         <div class="grid form">
           <button id="btnSyncUp" class="btn primary" type="button">Sync Up</button>
           <button id="btnPullMaster" class="btn" type="button">Tarik Master Data</button>
           <button id="btnPullLogs" class="btn" type="button">Tarik Data Aktual</button>
+          <button id="btnResetApp" class="btn danger" type="button">Hapus Data Lokal</button>
         </div>
+
         <div class="muted small" id="syncInfo"></div>
       </div>
     </div>

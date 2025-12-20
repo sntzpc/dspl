@@ -8,7 +8,7 @@
  */
 (function(){
   const DB_NAME = "tc_pelanggaran_db";
-  const DB_VER  = 1;
+  const DB_VER  = 2;
 
   function openDB(){
     return new Promise((resolve, reject)=>{
@@ -32,6 +32,19 @@
         }
         if(!db.objectStoreNames.contains("meta")){
           db.createObjectStore("meta", { keyPath: "k" });
+        }
+        if(!db.objectStoreNames.contains("sanction_assignments")){
+          const s = db.createObjectStore("sanction_assignments", { keyPath: "id" });
+          s.createIndex("nik", "nik", { unique:false });
+          s.createIndex("status", "status", { unique:false });
+          s.createIndex("created_at", "created_at", { unique:false });
+        }
+        if(!db.objectStoreNames.contains("sanction_reports")){
+          const s = db.createObjectStore("sanction_reports", { keyPath: "id" });
+          s.createIndex("assignment_id", "assignment_id", { unique:false });
+          s.createIndex("nik", "nik", { unique:false });
+          s.createIndex("created_at", "created_at", { unique:false });
+          s.createIndex("synced", "synced", { unique:false });
         }
       };
       req.onsuccess = ()=> resolve(req.result);
