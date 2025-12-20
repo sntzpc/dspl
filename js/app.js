@@ -102,10 +102,8 @@
       if(bar) bar.style.width = "0%";
     }
 
-
-
   // ====== HARD-CODE GAS CONFIG (tanam permanen) ======
-  const HARD_GAS_URL = "https://script.google.com/macros/s/AKfycbyyRvNuM6b4qxI0VjGTyqer0xlnSvVp_7vT5sIX6GigX5Kjcxd9QsOhfPOFrFiNfeHa/exec";
+  const HARD_GAS_URL = "https://script.google.com/macros/s/AKfycbzKcSqt2lrjQl5_9h6rT8ObjBfDRol9be1i0BjT6ZZdyDpn8KWCQ2lIZ7_NjbbDeshO/exec";
   const HARD_API_KEY = "sntz2025"; // boleh "" jika tidak dipakai
   // ====== END HARD-CODE ======
 
@@ -1767,11 +1765,30 @@
         : (st === "reported" ? `<span class="badge">reported</span>` : `<span class="badge off">open</span>`);
 
       let aksi = "-";
-      if(isUser){
-        aksi = `<button class="btn ghost btnReport" data-id="${escapeAttr(x.id)}">Laporkan</button>`;
-      }else{
-        aksi = `<button class="btn ghost btnViewReport" data-id="${escapeAttr(x.id)}">Lihat Laporan</button>`;
-      }
+
+        if(isUser){
+          if(st === "open"){
+            aksi = `<button class="btn ghost btnReport" data-id="${escapeAttr(x.id)}">
+                      Laporkan
+                    </button>`;
+          }else if(st === "reported"){
+            aksi = `<button class="btn ghost btnViewReport" data-id="${escapeAttr(x.id)}"
+                      title="Lihat laporan yang sudah Anda kirim">
+                      Lihat Laporan
+                    </button>`;
+          }else if(st === "done"){
+            aksi = `<button class="btn ghost btnViewReport" data-id="${escapeAttr(x.id)}"
+                      title="Lihat laporan (sudah diverifikasi)">
+                      Lihat Laporan
+                    </button>`;
+          }
+        }else{
+          // admin
+          aksi = `<button class="btn ghost btnViewReport" data-id="${escapeAttr(x.id)}">
+                    Lihat Laporan
+                  </button>`;
+        }
+
 
       return `<tr>
         <td>${fmtDate(new Date(x.created_at))}</td>
@@ -1795,6 +1812,7 @@
     root.addEventListener("click", async (e)=>{
       const btn = e.target.closest("button");
       if(!btn) return;
+      if(btn.disabled) return;
 
       const id = btn.getAttribute("data-id");
       if(!id) return;
@@ -1966,8 +1984,9 @@
 
   async function openViewReport_(assignmentId){
     // Admin melihat laporan: cari report di store
-    if(!isAdmin()){
-      toast("Hanya admin.");
+    const a = loadAuth();
+    if(!a){
+      toast("Belum login.");
       return;
     }
     const reps = await IDB.queryIndex("sanction_reports", "assignment_id", { eq: assignmentId });
@@ -2025,6 +2044,29 @@
       return;
     }
 
+    // ✅ PATCH: anti double click + progress pada tombol kirim
+    const btn = $("#btnSubmitReport");
+    const lockBtn = (text)=>{
+      if(!btn) return;
+      if(btn.dataset._locked === "1") return; // sudah terkunci
+      btn.dataset._locked = "1";
+      btn.dataset._label = btn.textContent;
+      btn.textContent = text || "⏳ Mengirim...";
+      btn.disabled = true;
+      btn.style.opacity = "0.7";
+    };
+    const unlockBtn = ()=>{
+      if(!btn) return;
+      btn.textContent = btn.dataset._label || "Kirim Laporan";
+      btn.disabled = false;
+      btn.style.opacity = "1";
+      delete btn.dataset._locked;
+      delete btn.dataset._label;
+    };
+
+    // kalau sudah terkunci, stop (hindari double click)
+    if(btn && btn.dataset._locked === "1") return;
+
     const f1 = $("#reportBefore").files?.[0];
     const f2 = $("#reportAfter").files?.[0];
     if(!f1 || !f2){
@@ -2032,56 +2074,74 @@
       return;
     }
 
-    $("#reportInfo").textContent = "Memproses foto...";
-    const before_b64 = await compressImageToDataUrl(f1, 1280, 0.75);
-    const after_b64  = await compressImageToDataUrl(f2, 1280, 0.75);
+    try{
+      lockBtn("⏳ Memproses...");
 
-    const payload = {
-      id: uuid(),
-      assignment_id: __currentReportTarget.id,
-      nik: __currentReportTarget.nik,
-      nama: __currentReportTarget.nama,
-      note_user: String($("#reportNote").value||"").trim(),
-      before_b64,
-      after_b64,
-      created_at: new Date().toISOString()
-    };
+      $("#reportInfo").textContent = "1/4 • Memproses foto BEFORE...";
+      const before_b64 = await compressImageToDataUrl(f1, 1280, 0.75);
 
-    // Simpan lokal queue dulu
-    await IDB.put("sanction_reports", { ...payload, synced:false, synced_at:"" });
-    toast("Laporan tersimpan di lokal ✅");
+      $("#reportInfo").textContent = "2/4 • Memproses foto AFTER...";
+      const after_b64  = await compressImageToDataUrl(f2, 1280, 0.75);
 
-    // kirim kalau online
-    if(navigator.onLine){
-      try{
-        $("#reportInfo").textContent = "Mengirim laporan ke server...";
-        await gasFetch("submitSanctionReport", payload, "POST");
+      $("#reportInfo").textContent = "3/4 • Menyimpan antrian lokal...";
+      const payload = {
+        id: uuid(),
+        assignment_id: __currentReportTarget.id,
+        nik: __currentReportTarget.nik,
+        nama: __currentReportTarget.nama,
+        note_user: String($("#reportNote").value||"").trim(),
+        before_b64,
+        after_b64,
+        created_at: new Date().toISOString()
+      };
 
-        $("#reportInfo").textContent = "Mengonfirmasi (pull laporan)...";
-        await pullAssignmentsIfOnline_();
+      // Simpan lokal queue dulu
+      await IDB.put("sanction_reports", { ...payload, synced:false, synced_at:"" });
+      toast("Laporan tersimpan di lokal ✅");
 
-        // setelah pull, report dari server sudah masuk IDB dengan before_url/after_url
-        const cur = await IDB.get("sanction_reports", payload.id);
-        if(cur){
-          cur.synced = true;
-          cur.synced_at = new Date().toISOString();
-          await IDB.put("sanction_reports", cur);
+      // kirim kalau online
+      if(navigator.onLine){
+        try{
+          lockBtn("⏳ Mengirim...");
+          $("#reportInfo").textContent = "4/4 • Mengirim laporan ke server...";
+          await gasFetch("submitSanctionReport", payload, "POST");
+
+          $("#reportInfo").textContent = "Mengonfirmasi (pull laporan)...";
+          await pullAssignmentsIfOnline_();
+
+          // Setelah pull, report dari server sudah masuk IDB (punya before_url/after_url)
+          // Tandai synced untuk id ini (jika sudah ada)
+          const cur = await IDB.get("sanction_reports", payload.id);
+          if(cur){
+            cur.synced = true;
+            cur.synced_at = new Date().toISOString();
+            await IDB.put("sanction_reports", cur);
+          }
+
+          $("#reportInfo").textContent = "Laporan terkirim ✅";
+          toast("Laporan terkirim ✅");
+        }catch(e){
+          $("#reportInfo").textContent = "Gagal kirim (tetap tersimpan lokal): " + e.message;
+          toast("Gagal kirim: " + e.message);
         }
-
-        $("#reportInfo").textContent = "Laporan terkirim ✅";
-        toast("Laporan terkirim ✅");
-      }catch(e){
-        $("#reportInfo").textContent = "Gagal kirim (tetap tersimpan lokal): " + e.message;
-        toast("Gagal kirim: " + e.message);
+      }else{
+        $("#reportInfo").textContent = "Offline: laporan akan terkirim saat online & klik 'Kirim Laporan' (Queue).";
       }
-    }else{
-      $("#reportInfo").textContent = "Offline: laporan akan terkirim saat online & klik 'Kirim Laporan'.";
+
+      // Tutup modal + refresh tabel (agar tombol Laporkan jadi nonaktif jika status sudah reported)
+      closeReportModal_();
+      await renderAssignmentsTable_();
+      await renderQueueKpi();
+
+    }catch(e){
+      console.error(e);
+      $("#reportInfo").textContent = "Gagal: " + (e.message || e);
+      toast("Gagal: " + (e.message || e));
+    }finally{
+      unlockBtn();
     }
-
-
-    closeReportModal_();
-    await renderAssignmentsTable_();
   }
+
 
   async function syncUpReportsOnly_(){
     const a = loadAuth();
