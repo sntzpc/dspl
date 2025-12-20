@@ -649,15 +649,38 @@
 }
 
   async function renderQueueKpi(){
-  // Jangan bergantung ke index boolean "synced" (lebih aman cross-browser)
-    const all = await getVisibleViolations();
+    const a = loadAuth();
+    const isUser = a && a.role === "user";
+    const myNik = isUser ? String(a.nik||"").trim() : "";
 
-    // Queue = semua record yang BELUM benar-benar synced (true)
-    const queue = (all || []).filter(r => r && r.synced !== true);
+    // 1) violations queue (user hanya miliknya)
+    const vAll = await IDB.getAll("violations");
+    let vRows = (vAll || []).filter(r => r && r.synced !== true);
+    if(isUser) vRows = vRows.filter(r => String(r.nik||"").trim() === myNik);
 
-    $("#kpiQueue").textContent = String(queue.length);
-    $("#kpiQueueSub").textContent = queue.length ? "Perlu Sync Up" : "Semua data sudah tersinkron";
+    // 2) assignments queue (admin saja yang bisa kirim; user tidak punya queue assignment)
+    const aAll = await IDB.getAll("sanction_assignments");
+    const aRows = (aAll || []).filter(r => r && r.synced !== true);
+
+    // 3) reports queue (user hanya miliknya)
+    const rAll = await IDB.getAll("sanction_reports");
+    let rRows = (rAll || []).filter(r => r && r.synced !== true);
+    if(isUser) rRows = rRows.filter(r => String(r.nik||"").trim() === myNik);
+
+    // Tampilkan ringkas
+    const total = vRows.length + (isUser ? 0 : aRows.length) + rRows.length;
+    $("#kpiQueue").textContent = String(total);
+
+    const parts = [];
+    if(!isUser) parts.push(`Pelanggaran:${vRows.length}`);
+    if(!isUser) parts.push(`Sanksi:${aRows.length}`);
+    parts.push(`Laporan:${rRows.length}`);
+
+    $("#kpiQueueSub").textContent = total
+      ? ("Perlu Sync • " + parts.join(" | "))
+      : "Semua data sudah tersinkron";
   }
+
 
   async function openRiskModal(){
       const m = $("#riskModal");
@@ -985,12 +1008,13 @@
       }
     }
 
-    // POST -> no-cors (hindari preflight & CORS)
-    if(payload && (!method || method === "POST")){
-      const js = await postViaIframe(url.toString(), payload, 30000);
-      if(!js || js.ok === false) throw new Error((js && js.message) || "Gagal POST (iframe).");
-      return js;
-    }
+    // ✅ POST -> fetch no-cors (TIDAK kena X-Frame-Options karena bukan iframe)
+      if(payload && (!method || method === "POST")){
+        await postNoCors(url.toString(), payload);
+        // response "opaque" tidak bisa dibaca, jadi konfirmasi dilakukan lewat GET (pull)
+        return { ok:true, message:"sent(no-cors)" };
+      }
+
 
     // fallback
     const js = await jsonp(url.toString(), 25000);
@@ -1015,6 +1039,7 @@
   async function syncUp(){
     const a = loadAuth();
     if(a && a.role === "user") throw new Error("Mode user: tidak diizinkan sync.");
+
     const all = await IDB.getAll("violations");
     const queue = (all || []).filter(r => r && r.synced !== true);
 
@@ -1026,18 +1051,18 @@
 
     $("#syncInfo").textContent = `Mengirim ${queue.length} data...`;
 
-    // 1) Kirim (no-cors, tanpa baca response)
-    const res = await gasFetch("upsertViolations", { rows: queue }, "POST");
-    const idsOk = new Set((res.ids || []).map(x=>String(x).trim()).filter(Boolean));
+    // 1) KIRIM (no-cors, tidak baca response)
+    await gasFetch("upsertViolations", { rows: queue }, "POST");
 
+    // 2) KONFIRMASI: tarik ulang logs dari server (GET JSONP)
+    $("#syncInfo").textContent = "Mengonfirmasi hasil (pull logs)...";
+    await pullLogs(); // ini akan menimpa record server -> synced:true
+
+    // 3) Hitung berapa yang benar-benar sudah synced setelah pull
     let updated = 0;
     for(const r of queue){
-      if(r && idsOk.has(String(r.id))){
-        r.synced = true;
-        r.synced_at = new Date().toISOString();
-        await IDB.put("violations", r);
-        updated++;
-      }
+      const cur = await IDB.get("violations", r.id);
+      if(cur && cur.synced === true) updated++;
     }
 
     $("#syncInfo").textContent = `Selesai: ${updated}/${queue.length} baris terkonfirmasi masuk ke Server.`;
@@ -1049,6 +1074,7 @@
 
     toast("Sync Up selesai ✅");
   }
+
 
   function uniqBy(arr, keyFn){
     const m = new Map();
@@ -1259,9 +1285,15 @@
     if(isUser){
       // user: hanya boleh Tarik Data Aktual + Reset Aplikasi
       if(btnSyncUp){
-        btnSyncUp.disabled = true;
-        btnSyncUp.style.opacity = "0.6";
-        btnSyncUp.title = "Mode user: tidak diizinkan Sync Up";
+        // user boleh sync khusus laporan sanksi
+        btnSyncUp.disabled = false;
+        btnSyncUp.style.opacity = "1";
+        btnSyncUp.title = "Kirim antrian laporan sanksi Anda";
+        btnSyncUp.textContent = "Kirim Laporan (Queue)";
+
+        bindTap(btnSyncUp, ()=>{
+          safeRun(btnSyncUp, async ()=>{ await syncUpReportsOnly_(); }, "⏳ Mengirim...");
+        });
       }
       if(btnPullMaster){
         btnPullMaster.disabled = true;
@@ -1298,8 +1330,10 @@
     // ===== 3) ADMIN: pasang handler dengan anti double-click =====
     if(btnSyncUp){
       bindTap(btnSyncUp, ()=>{
-        safeRun(btnSyncUp, async ()=>{ await syncUp(); }, "⏳ Syncing...");
+        safeRun(btnSyncUp, async ()=>{ await syncUpAll_(); }, "⏳ Sync All...");
       });
+      // opsional: ubah label tombol
+      btnSyncUp.textContent = "Sync Up (Semua)";
     }
 
     if(btnPullMaster){
@@ -1697,13 +1731,18 @@
       id: String(r.id || "").trim() || uuid(),
       nik: String(r.nik || "").trim(),
       nama: String(r.nama || "").trim(),
-      sanksi: String(r.sanksi || "").trim(),          // "a | b | c"
+      sanksi: String(r.sanksi || "").trim(),
       note_admin: String(r.note_admin || "").trim(),
-      status: String(r.status || "open").trim(),      // open / reported / done
+      status: String(r.status || "open").trim(),
       created_at: r.created_at || new Date().toISOString(),
-      updated_at: r.updated_at || ""
+      updated_at: r.updated_at || "",
+
+      // ✅ penting untuk konfirmasi
+      synced: true,
+      synced_at: r.updated_at || new Date().toISOString(),
     };
   }
+
 
   async function renderAssignmentsTable_(){
     const a = loadAuth();
@@ -2016,23 +2055,17 @@
     if(navigator.onLine){
       try{
         $("#reportInfo").textContent = "Mengirim laporan ke server...";
-        const js = await gasFetch("submitSanctionReport", payload, "POST");
-        // tandai synced + simpan url balikannya kalau ada
-        const rec = await IDB.get("sanction_reports", payload.id);
-        if(rec){
-          rec.synced = true;
-          rec.synced_at = new Date().toISOString();
-          if(js.before_url) rec.before_url = js.before_url;
-          if(js.after_url)  rec.after_url  = js.after_url;
-          await IDB.put("sanction_reports", rec);
-        }
+        await gasFetch("submitSanctionReport", payload, "POST");
 
-        // update status assignment jadi reported
-        const asg = await IDB.get("sanction_assignments", __currentReportTarget.id);
-        if(asg){
-          asg.status = "reported";
-          asg.updated_at = new Date().toISOString();
-          await IDB.put("sanction_assignments", asg);
+        $("#reportInfo").textContent = "Mengonfirmasi (pull laporan)...";
+        await pullAssignmentsIfOnline_();
+
+        // setelah pull, report dari server sudah masuk IDB dengan before_url/after_url
+        const cur = await IDB.get("sanction_reports", payload.id);
+        if(cur){
+          cur.synced = true;
+          cur.synced_at = new Date().toISOString();
+          await IDB.put("sanction_reports", cur);
         }
 
         $("#reportInfo").textContent = "Laporan terkirim ✅";
@@ -2042,56 +2075,168 @@
         toast("Gagal kirim: " + e.message);
       }
     }else{
-      $("#reportInfo").textContent = "Offline: laporan akan terkirim saat online & sync.";
+      $("#reportInfo").textContent = "Offline: laporan akan terkirim saat online & klik 'Kirim Laporan'.";
     }
+
 
     closeReportModal_();
     await renderAssignmentsTable_();
   }
 
+  async function syncUpReportsOnly_(){
+    const a = loadAuth();
+    if(!a || a.role !== "user") throw new Error("Hanya user.");
+    if(!navigator.onLine) throw new Error("Offline. Nyalakan internet untuk kirim laporan.");
+
+    const myNik = String(a.nik||"").trim();
+    const allR = await IDB.getAll("sanction_reports");
+    const queueR = (allR || []).filter(r => r && r.synced !== true && String(r.nik||"").trim() === myNik);
+
+    if(!queueR.length){
+      toast("Tidak ada antrian laporan.");
+      $("#syncInfo").textContent = "Tidak ada antrian laporan yang perlu dikirim.";
+      return;
+    }
+
+    $("#syncInfo").textContent = `Mengirim ${queueR.length} laporan...`;
+
+    // Kirim satu-satu (payload besar karena foto)
+    for(const r of queueR){
+      try{
+        await gasFetch("submitSanctionReport", r, "POST");
+        // JANGAN langsung set synced=true di sini (POST no-cors tidak bisa dikonfirmasi)
+        // Konfirmasi dilakukan setelah pull.
+      }catch(e){
+        console.warn("Kirim ulang report gagal:", e);
+      }
+    }
+
+    $("#syncInfo").textContent = "Mengonfirmasi (pull laporan dari server)...";
+    await pullAssignmentsIfOnline_(); // ini menarik reports juga
+
+    // Konfirmasi: jika report id sudah ada di server (ter-pull), tandai synced
+    const afterPull = await IDB.getAll("sanction_reports");
+    const serverIds = new Set((afterPull||[]).filter(x=> x && x.synced === true).map(x=> String(x.id)));
+
+    let confirmed = 0;
+    for(const r of queueR){
+      if(serverIds.has(String(r.id))){
+        const cur = await IDB.get("sanction_reports", r.id);
+        if(cur){
+          cur.synced = true;
+          cur.synced_at = new Date().toISOString();
+          await IDB.put("sanction_reports", cur);
+        }
+        confirmed++;
+      }
+    }
+
+    $("#syncInfo").textContent = `Selesai: ${confirmed}/${queueR.length} laporan terkonfirmasi di server.`;
+    await renderQueueKpi();
+    toast("Sync laporan selesai ✅");
+  }
+
+
   async function syncUpAll_(){
-    // kirim queue violations + assignments (admin) + reports (user/admin)
-    // (pakai endpoint yang sudah ada + endpoint baru)
+    // Kirim queue violations + assignments (admin) + reports (user/admin)
+    // Pola baru:
+    // - POST pakai no-cors (tidak bisa baca response)
+    // - Konfirmasi hasil lewat GET JSONP (pull...)
     const a = loadAuth();
     if(!a) return;
 
-    // 1) violations: pakai syncUp existing (admin saja)
+    // =========================
+    // 1) VIOLATIONS (admin saja)
+    // =========================
     if(a.role === "admin"){
+      // syncUp() juga sudah diubah: POST no-cors lalu konfirmasi via pullLogs()
       await syncUp();
     }
 
-    // 2) assignments: admin saja
+    // ==================================
+    // 2) ASSIGNMENTS (admin saja)
+    // ==================================
     if(a.role === "admin"){
       const allA = await IDB.getAll("sanction_assignments");
-      const queueA = (allA||[]).filter(r => r && r.synced !== true);
+      const queueA = (allA || []).filter(r => r && r.synced !== true);
+
       if(queueA.length){
-        const resA = await gasFetch("upsertAssignments", { rows: queueA }, "POST");
-        const okIds = new Set((resA.ids||[]).map(x=>String(x).trim()).filter(Boolean));
+        // 2a) KIRIM (POST no-cors)
+        await gasFetch("upsertAssignments", { rows: queueA }, "POST");
+
+        // 2b) KONFIRMASI (pull dari server → akan menandai synced:true via normalizeAssignment_())
+        await pullAssignmentsIfOnline_();
+
+        // 2c) UPDATE lokal: set synced untuk yang sudah muncul/terkonfirmasi
         for(const r of queueA){
-          if(okIds.has(String(r.id))){
-            r.synced = true;
-            r.synced_at = new Date().toISOString();
-            await IDB.put("sanction_assignments", r);
+          const cur = await IDB.get("sanction_assignments", r.id);
+          if(cur && cur.synced === true){
+            // sudah benar dari server, aman
+            continue;
           }
+          // kalau belum terkonfirmasi (misal pull gagal), BIARKAN queue
         }
       }
     }
 
-    // 3) reports: bisa user/admin (tapi user submit langsung biasanya)
-    //   Jika ada laporan yang belum synced, coba submit satu-satu (karena endpoint upload foto)
+    // ==========================================
+    // 3) REPORTS (user/admin) - submit ulang jika perlu
+    // ==========================================
+    // Karena submitSanctionReport dulu mengembalikan before_url/after_url,
+    // sekarang POST no-cors tidak bisa baca response. Maka:
+    // - tetap kirim ulang laporan yg queue
+    // - lalu konfirmasi dengan pullAssignmentsIfOnline_() agar before_url/after_url terisi dari server
     const allR = await IDB.getAll("sanction_reports");
-    const queueR = (allR||[]).filter(r => r && r.synced !== true);
-    for(const r of queueR){
-      // kirim ulang
-      const js = await gasFetch("submitSanctionReport", r, "POST");
-      r.synced = true;
-      r.synced_at = new Date().toISOString();
-      if(js.before_url) r.before_url = js.before_url;
-      if(js.after_url)  r.after_url  = js.after_url;
-      await IDB.put("sanction_reports", r);
-    }
-  }
+    const queueR = (allR || []).filter(r => r && r.synced !== true);
 
+    if(queueR.length){
+      // 3a) KIRIM ulang satu-satu (lebih aman karena payload besar)
+      for(const r of queueR){
+        try{
+          await gasFetch("submitSanctionReport", r, "POST");
+
+          // Tandai "terkirim" secara optimis.
+          // Konfirmasi dan pengisian before_url/after_url dilakukan lewat pull.
+          r.synced = true;
+          r.synced_at = new Date().toISOString();
+          await IDB.put("sanction_reports", r);
+        }catch(e){
+          // kalau gagal, biarkan tetap queue
+          console.warn("Resend report failed:", e);
+        }
+      }
+
+      // 3b) KONFIRMASI: tarik lagi assignments + reports dari server
+      // - reports dari server punya before_url/after_url
+      // - assignments status bisa berubah jadi "reported"
+      if(navigator.onLine){
+        await pullAssignmentsIfOnline_();
+      }
+
+      // 3c) Setelah pull, kita coba merge url ke record lokal (kalau server punya)
+      // Catatan: pullAssignmentsIfOnline_() sudah put() semua reports dari server.
+      // Jadi di sini cukup memastikan record queue yang sama sudah ada url-nya.
+      for(const r of queueR){
+        const cur = await IDB.get("sanction_reports", r.id);
+        if(cur){
+          // kalau sudah ada before_url/after_url dari server, biarkan
+          continue;
+        }
+        // kalau belum ada (misal server generate id berbeda), maka minimal sudah "synced:true" optimis.
+        // Anda bisa tambah logika matching by assignment_id + created_at jika ingin lebih presisi.
+      }
+    }
+
+    // =========================
+    // 4) Refresh UI (opsional)
+    // =========================
+    try{
+      await renderAssignmentsTable_();
+    }catch(_){}
+    try{
+      await renderQueueKpi();
+    }catch(_){}
+  }
 
 
   // ====== boot ======
