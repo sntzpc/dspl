@@ -201,6 +201,16 @@
     return t || {status:"—", konsekuensi:"—"};
   }
 
+    const WARNING_MIN = 31;
+      const WARNING_MAX = 49;
+      const WARNING_SANCTION_TEXT = "Mencuci peralatan makan 1 hari";
+
+      function isWarningPoints(total){
+        const t = Number(total||0);
+        return t >= WARNING_MIN && t <= WARNING_MAX;
+      }
+
+
   async function ensureSeeded(){
     const seeded = await IDB.getMeta("seeded_v1");
     if(seeded) return;
@@ -574,6 +584,17 @@
     byNik.set(r.nik, (byNik.get(r.nik)||0) + Number(r.poin||0));
   }
 
+    // Peserta “warning” pada range (31–49 poin)
+  let warn = 0;
+  for(const v of byNik.values()){
+    if(v >= WARNING_MIN && v < 50) warn++;
+  }
+  const elW = $("#kpiWarn");
+  const elWS = $("#kpiWarnSub");
+  if(elW) elW.textContent = String(warn);
+  if(elWS) elWS.textContent = `Dari ${byNik.size} peserta yang punya catatan pada periode ini`;
+
+
   // Peserta “bermasalah” pada range (≥50 poin)
   let risk = 0;
   for(const v of byNik.values()){
@@ -677,6 +698,117 @@
     $("#kpiQueueSub").textContent = total
       ? ("Perlu Sync • " + parts.join(" | "))
       : "Semua data sudah tersinkron";
+  }
+
+  async function openWarnModal(){
+    const m = $("#warnModal");
+    if(!m) return;
+
+    // ✅ Ambil assignments terbaru kalau online (supaya status open/reported/done up to date)
+    // Ini “realtime” dalam konteks aplikasi offline-first.
+    await pullAssignmentsIfOnline_();
+
+    const all = await getVisibleViolations();
+    const { from, to, label } = getDashRange();
+    const fromTs = from.getTime();
+    const toTs   = to.getTime();
+
+    const rowsRange = (all || []).filter(r=>{
+      const ts = new Date(r.waktu).getTime();
+      return ts >= fromTs && ts < toTs;
+    });
+
+    // aggregate by nik
+    const map = new Map(); // nik -> {total, nama}
+    for(const r of rowsRange){
+      const nik = String(r.nik || "").trim();
+      if(!nik) continue;
+      if(!map.has(nik)){
+        map.set(nik, { nik, nama: r.nama || "", total: 0 });
+      }
+      map.get(nik).total += Number(r.poin || 0);
+    }
+
+    const list = Array.from(map.values())
+      .filter(x=> x.total >= WARNING_MIN && x.total < 50)
+      .sort((a,b)=> b.total - a.total);
+
+    $("#warnModalSub").textContent = `Periode: ${label} • ${list.length} peserta`;
+
+    // ===== Ambil assignment dari IDB =====
+    let asgRows = await IDB.getAll("sanction_assignments");
+    asgRows = (asgRows || []).filter(a => a && a.nik);
+
+    // jika role user, assignment di IDB biasanya sudah terfilter saat pull,
+    // tapi aman juga untuk jaga-jaga:
+    const auth = loadAuth();
+    if(auth && auth.role === "user"){
+      const myNik = String(auth.nik || "").trim();
+      asgRows = asgRows.filter(a => String(a.nik || "").trim() === myNik);
+    }
+
+    $("#tblWarn").innerHTML = list.map(x=>{
+      const thr = pickThreshold(x.total);
+
+      // SP1 assignment kalau ada
+      const sp1 = findSp1AssignmentForNik_(asgRows, x.nik);
+
+      const sanksiTxt = sp1 ? (sp1.sanksi || WARNING_SANCTION_TEXT) : (WARNING_SANCTION_TEXT || "-");
+      const asgBadge  = sp1 ? badgeAssignment_(sp1.status) : `<span class="badge off">open</span>`;
+
+      // ✅ klik NIK/Nama langsung preview SP1 (window baru) + tombol print ada di dalamnya
+      const nikLink  = `<button class="btn ghost btnSp1Preview" data-nik="${escapeAttr(x.nik)}" data-nama="${escapeAttr(x.nama)}" data-total="${escapeAttr(x.total)}" style="padding:6px 10px">🔎 ${escapeHtml(x.nik)}</button>`;
+      const namaLink = `<button class="btn ghost btnSp1Preview" data-nik="${escapeAttr(x.nik)}" data-nama="${escapeAttr(x.nama)}" data-total="${escapeAttr(x.total)}" style="padding:6px 10px">${escapeHtml(x.nama)}</button>`;
+
+      return `<tr>
+        <td>${nikLink}</td>
+        <td>${namaLink}</td>
+        <td><b>${x.total}</b></td>
+        <td>${escapeHtml(thr.status || "Warning")}</td>
+        <td>${escapeHtml(sanksiTxt || "-")}</td>
+        <td>${asgBadge}</td>
+        <td>
+          <button class="btn ghost btnPrintSp1"
+            data-nik="${escapeAttr(x.nik)}"
+            data-nama="${escapeAttr(x.nama)}"
+            data-total="${escapeAttr(x.total)}"
+          >Cetak SP1</button>
+        </td>
+      </tr>`;
+    }).join("");
+
+    // bind actions (once per open)
+    const tbl = $("#tblWarn");
+    if(tbl && tbl.dataset._wired !== "1"){
+      tbl.dataset._wired = "1";
+      tbl.addEventListener("click", (e)=>{
+        // klik peserta -> preview SP1
+        const pv = e.target.closest("button.btnSp1Preview");
+        if(pv){
+          const nik = pv.getAttribute("data-nik");
+          const nama = pv.getAttribute("data-nama");
+          const total = Number(pv.getAttribute("data-total")||0);
+          printSp1Letter_({ nik, nama, total, periodLabel: label });
+          return;
+        }
+
+        // tombol cetak (tetap ada)
+        const b = e.target.closest("button.btnPrintSp1");
+        if(!b) return;
+        const nik = b.getAttribute("data-nik");
+        const nama = b.getAttribute("data-nama");
+        const total = Number(b.getAttribute("data-total")||0);
+        printSp1Letter_({ nik, nama, total, periodLabel: label });
+      }, { passive:false });
+    }
+
+    m.style.display = "flex";
+  }
+
+
+  function closeWarnModal(){
+    const m = $("#warnModal");
+    if(m) m.style.display = "none";
   }
 
 
@@ -1662,6 +1794,107 @@
   }, 2200);
   }
 
+    function printSp1Letter_({ nik, nama, total, periodLabel }){
+    const nowD = new Date();
+    const tanggal = nowD.toLocaleDateString("id-ID", { year:"numeric", month:"long", day:"2-digit" });
+
+    const html = `<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Surat Peringatan 1 - ${nik}</title>
+<style>
+  body{ font-family: Arial, sans-serif; margin:24px; color:#111; }
+  .wrap{ max-width:820px; margin:0 auto; }
+  h1{ font-size:18px; text-align:center; margin:0 0 10px; }
+  .meta{ margin:14px 0; line-height:1.5; }
+  .box{ border:1px solid #ddd; padding:12px 14px; border-radius:10px; }
+  .small{ font-size:12px; color:#333; }
+  .mt{ margin-top:14px; }
+  .sign{ margin-top:26px; }
+  @media print{
+    button{ display:none; }
+    body{ margin:0; }
+    .wrap{ max-width:100%; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="window.print()">🖨️ Cetak</button>
+  <h1>SURAT PERINGATAN 1 (SP1)</h1>
+  <div class="small" style="text-align:center;">
+    (Dibuat otomatis oleh Sistem Monitoring Pelanggaran Disiplin Training Center)
+  </div>
+
+  <div class="meta mt">
+    Tanggal: <b>${tanggal}</b><br/>
+    Periode akumulasi: <b>${escapeHtml(periodLabel || "30 hari terakhir")}</b>
+  </div>
+
+  <div class="box">
+    Dengan ini diberikan Surat Peringatan 1 kepada peserta berikut:
+    <div class="meta">
+      NIK: <b>${escapeHtml(nik)}</b><br/>
+      Nama: <b>${escapeHtml(nama)}</b><br/>
+      Total poin: <b>${Number(total||0)}</b> (kategori <b>Warning</b>, 31–49 poin)
+    </div>
+
+    <div class="mt">
+      Peserta diwajibkan meningkatkan disiplin dan kepatuhan terhadap ketentuan Training Center.
+      SP1 ini diterbitkan otomatis berdasarkan akumulasi poin pelanggaran pada periode di atas.
+    </div>
+
+    <div class="mt">
+      Sanksi yang berlaku untuk kategori Warning:
+      <b>${escapeHtml(WARNING_SANCTION_TEXT)}</b>.
+    </div>
+
+    <div class="small mt">
+      Catatan: Dokumen ini tidak memerlukan tanda tangan karena diterbitkan otomatis oleh sistem.
+    </div>
+  </div>
+
+  <div class="sign small">
+    Seriang Training Center
+  </div>
+</div>
+</body>
+</html>`;
+
+    const w = window.open("", "_blank");
+    if(!w){
+      alert("Popup diblokir. Izinkan pop-up untuk mencetak SP1.");
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  }
+
+  function badgeAssignment_(st){
+    const s = String(st || "open").toLowerCase();
+    if(s === "done") return `<span class="badge ok">done</span>`;
+    if(s === "reported") return `<span class="badge">reported</span>`;
+    return `<span class="badge off">open</span>`;
+  }
+
+  function findSp1AssignmentForNik_(assignRows, nik){
+    const idSp1 = "SP1_" + String(nik || "").trim();
+    // prioritas: id SP1_*
+    let hit = (assignRows || []).find(a => String(a.id || "").trim() === idSp1);
+    if(hit) return hit;
+
+    // fallback: note_admin ada AUTO_SP1
+    hit = (assignRows || []).find(a =>
+      String(a.nik || "").trim() === String(nik || "").trim() &&
+      String(a.note_admin || "").includes("AUTO_SP1")
+    );
+    return hit || null;
+  }
+
+
   // ====== SANCTIONS (Assignment + Report) ======
   let __currentAssignTarget = null;   // admin assign modal context
   let __currentReportTarget = null;   // user report modal context
@@ -1765,30 +1998,44 @@
         : (st === "reported" ? `<span class="badge">reported</span>` : `<span class="badge off">open</span>`);
 
       let aksi = "-";
+      const isSp1 = String(x.note_admin || "").includes("AUTO_SP1");
 
-        if(isUser){
-          if(st === "open"){
-            aksi = `<button class="btn ghost btnReport" data-id="${escapeAttr(x.id)}">
-                      Laporkan
-                    </button>`;
-          }else if(st === "reported"){
-            aksi = `<button class="btn ghost btnViewReport" data-id="${escapeAttr(x.id)}"
-                      title="Lihat laporan yang sudah Anda kirim">
-                      Lihat Laporan
-                    </button>`;
-          }else if(st === "done"){
-            aksi = `<button class="btn ghost btnViewReport" data-id="${escapeAttr(x.id)}"
-                      title="Lihat laporan (sudah diverifikasi)">
-                      Lihat Laporan
-                    </button>`;
-          }
-        }else{
-          // admin
-          aksi = `<button class="btn ghost btnViewReport" data-id="${escapeAttr(x.id)}">
-                    Lihat Laporan
-                  </button>`;
+      if(isUser){
+        const btnPrint = isSp1
+          ? `<button class="btn ghost btnPrintSp1Inline" data-nik="${escapeAttr(x.nik)}" data-nama="${escapeAttr(x.nama)}">Cetak SP1</button>`
+          : "";
+
+        if(st === "open"){
+          aksi = `
+            <div class="row" style="gap:8px; flex-wrap:wrap">
+              <button class="btn ghost btnReport" data-id="${escapeAttr(x.id)}">Laporkan</button>
+              ${btnPrint}
+            </div>`;
+        }else if(st === "reported"){
+          aksi = `
+            <div class="row" style="gap:8px; flex-wrap:wrap">
+              <button class="btn ghost btnViewReport" data-id="${escapeAttr(x.id)}" title="Lihat laporan yang sudah Anda kirim">Lihat Laporan</button>
+              ${btnPrint}
+            </div>`;
+        }else if(st === "done"){
+          aksi = `
+            <div class="row" style="gap:8px; flex-wrap:wrap">
+              <button class="btn ghost btnViewReport" data-id="${escapeAttr(x.id)}" title="Lihat laporan (sudah diverifikasi)">Lihat Laporan</button>
+              ${btnPrint}
+            </div>`;
         }
+      }else{
+        // admin
+        const btnPrint = isSp1
+          ? `<button class="btn ghost btnPrintSp1Inline" data-nik="${escapeAttr(x.nik)}" data-nama="${escapeAttr(x.nama)}">Cetak SP1</button>`
+          : "";
 
+        aksi = `
+          <div class="row" style="gap:8px; flex-wrap:wrap">
+            <button class="btn ghost btnViewReport" data-id="${escapeAttr(x.id)}">Lihat Laporan</button>
+            ${btnPrint}
+          </div>`;
+      }
 
       return `<tr>
         <td>${fmtDate(new Date(x.created_at))}</td>
@@ -1822,6 +2069,30 @@
       }
       if(btn.classList.contains("btnViewReport")){
         await openViewReport_(id);
+      }
+            if(btn.classList.contains("btnPrintSp1Inline")){
+        // total poin diambil ulang dari dashboard-range supaya akurat
+        const nik = btn.getAttribute("data-nik");
+        const nama = btn.getAttribute("data-nama");
+
+        const all = await getVisibleViolations();
+        const { from, to, label } = getDashRange();
+        const fromTs = from.getTime();
+        const toTs   = to.getTime();
+
+        const rowsRange = (all || []).filter(r=>{
+          const ts = new Date(r.waktu).getTime();
+          return ts >= fromTs && ts < toTs;
+        });
+
+        let total = 0;
+        for(const r of rowsRange){
+          if(String(r.nik||"").trim() === String(nik||"").trim()){
+            total += Number(r.poin||0);
+          }
+        }
+
+        printSp1Letter_({ nik, nama, total, periodLabel: label });
       }
     }, { passive:false });
   }
@@ -2423,6 +2694,16 @@
     wireDataTab();
     wireSyncTab();
     wireInput();
+
+    // ===== Warning modal events =====
+    clickOnce("#btnCloseWarn", ()=> closeWarnModal());
+    bindOnce($("#warnModal"), "click", (e)=>{
+      if(e.target?.id === "warnModal") closeWarnModal();
+    });
+
+    // ===== Klik kartu KPI Warning =====
+    clickOnce("#cardWarn", ()=> openWarnModal().catch(()=>{}));
+
 
     // ===== Risk modal events =====
     clickOnce("#btnCloseRisk", ()=> closeRiskModal());

@@ -58,6 +58,14 @@
         <div id="kpiPoints30" class="kpi">0</div>
         <div id="kpiPoints30Sub" class="muted">—</div>
       </div>
+      <div class="card kpi-clickable" id="cardWarn">
+        <div class="label">
+          <span class="kpiIcon">🟡</span> Peserta Warning (31–49 poin)
+        </div>
+        <div id="kpiWarn" class="kpi">0</div>
+        <div id="kpiWarnSub" class="muted">—</div>
+        <div class="kpiHint">Ketuk untuk melihat daftar peserta</div>
+      </div>
       <div class="card kpi-clickable" id="cardRisk">
         <div class="label">
           <span class="kpiIcon">⚠️</span> Peserta Bermasalah (≥ 50 poin)
@@ -414,6 +422,37 @@
     <div class="muted small">Catatan: untuk keamanan, QR cukup berisi NIK saja.</div>
   </div>
 </div>
+
+<!-- WARNING MODAL -->
+<div id="warnModal" class="modal" style="display:none">
+  <div class="modalCard">
+    <div class="row">
+      <div>
+        <div class="label">Peserta Warning (31–49 poin)</div>
+        <div class="muted small" id="warnModalSub">—</div>
+      </div>
+      <button id="btnCloseWarn" class="btn ghost">Tutup</button>
+    </div>
+
+    <div class="tableWrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>NIK</th>
+            <th>Nama</th>
+            <th>Total Poin</th>
+            <th>Status</th>
+            <th>Sanksi</th>
+            <th>Assignment</th>
+            <th>SP1</th>
+          </tr>
+        </thead>
+        <tbody id="tblWarn"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 
 <!-- RISK MODAL -->
 <div id="riskModal" class="modal" style="display:none">
