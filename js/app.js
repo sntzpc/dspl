@@ -2698,6 +2698,30 @@
     bindOnce($("#reportBefore"), "change", ()=> { $("#beforeHint").textContent = $("#reportBefore").files?.[0]?.name || "Belum dipilih"; });
     bindOnce($("#reportAfter"),  "change", ()=> { $("#afterHint").textContent  = $("#reportAfter").files?.[0]?.name  || "Belum dipilih"; });
 
+    // ===== FIX: Jangan paksa kamera, izinkan pilih dari Galeri/Files di mobile =====
+      (function forceGalleryPicker(){
+        const beforeEl = $("#reportBefore");
+        const afterEl  = $("#reportAfter");
+
+        const patch = (el)=>{
+          if(!el) return;
+
+          // Hapus capture supaya tidak langsung buka kamera
+          el.removeAttribute("capture");
+          try{ el.capture = ""; }catch(_){}
+
+          // Pastikan accept tetap image/*
+          el.setAttribute("accept", "image/*");
+
+          // optional: single file
+          el.removeAttribute("multiple");
+        };
+
+        patch(beforeEl);
+        patch(afterEl);
+      })();
+
+
     clickOnce("#btnSubmitReport", ()=> submitReport_().catch(e=> toast("Gagal: " + e.message)));
 
 
